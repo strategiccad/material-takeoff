@@ -72,12 +72,19 @@ th { background: #eee; }
 
 <h2>Material Takeoff & Nesting</h2>
 
-<input type="file" id="fileInput"><br>
+<input
+  type="file"
+  id="fileInput"
+  accept=".xlsx,.xlsm,.xls"
+/><br>
 
 <div class="buttonRow">
   <div class="leftButtons">
     <button onclick="importBOM()">Import BOM</button>
     <button onclick="toggleStock()">Configure Stock</button>
+    <button onclick="stockConfig.style.display='none'">
+  Hide Stock Configuration
+</button>
     <button onclick="generateCutLists()">Generate Cut Lists</button>
   </div>
 
@@ -131,10 +138,22 @@ function isStructural(desc) {
   return (
     desc.startsWith("W ")   ||  // wide flange
     desc.startsWith("HSS")  ||  // hollow structural section
+    desc.startsWith("TS ")  ||  // hollow structural section
+    desc.startsWith("PIPE ")  ||  // std pipe
+    desc.startsWith("FB ")  ||  //flat bar
     desc.startsWith("L ")   ||  // single angle
     desc.startsWith("WT ")  ||  // tee from W
     desc.startsWith("C ")   ||  // channel
     desc.startsWith("MC ")      // misc channel
+  );
+}
+
+function isExcelFile(file) {
+  const name = file.name.toLowerCase();
+  return (
+    name.endsWith(".xlsx") ||
+    name.endsWith(".xlsm") ||
+    name.endsWith(".xls")
   );
 }
 
@@ -153,6 +172,13 @@ function markDirty() {
 function clearDirty() {
   dirtyNotice.style.display = "none";
 }
+
+function ensureStockInitialized() {
+  if (!stockInitialized) {
+    toggleStock(); // initializes stock table
+  }
+}
+``
 
 /* =====================================================
    READ STOCK CONFIG
@@ -185,6 +211,12 @@ function readStockConfig() {
 function importBOM() {
   const f = fileInput.files[0];
   if (!f) return alert("Select a BOM file.");
+  
+if (!isExcelFile(f)) {
+  alert("Invalid file type. Please select an Excel file (.xlsx, .xlsm, or .xls).");
+  fileInput.value = ""; // reset input
+  return;
+}
 
   const r = new FileReader();
   r.onload = () => {
@@ -403,20 +435,23 @@ function toggleStock() {
     stockInitialized = true;
   }
 
-  stockConfig.style.display =
-    stockConfig.style.display === "none" ? "block" : "none";
+stockConfig.style.display = "block";
 }
 
 /* =====================================================
    GENERATE CUT LISTS
    ===================================================== */
+
 function generateCutLists() {
+  ensureStockInitialized();
+
   readStockConfig();
   const kerf = parseFloat(kerfInput.value) || 0;
   let html = "<h3>Cut Lists</h3>";
 
   lastNestResults = {};
   diagnostics = {};
+
 
   const grouped = {};
   bomRows.forEach(r => {
