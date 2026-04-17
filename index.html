@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Material Takeoff & Nesting</title>
+
+<!-- SheetJS -->
+<script src="./xlsx.full.min.js"></script>
+
+<style>
+body { font-family: Arial, sans-serif; margin: 20px; }
+button, input { margin: 6px 6px 6px 0; }
+
+table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+th, td { border: 1px solid #999; padding: 6px; }
+th { background: #eee; }
+
+.row-ok   { background: #f0fbf0; }
+.row-warn { background: #fff6e5; }
+.row-bad  { background: #fdecea; }
+
+.buttonRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.leftButtons button {
+  margin-right: 6px;
+}
+
+.rightButtons button {
+  margin-left: 12px;
+}
+
+#dirtyNotice {
+  display: none;
+  margin-top: 10px;
+  padding: 8px;
+  border: 1px solid #b00020;
+  color: #b00020;
+  font-weight: bold;
+  background: #fff5f5;
+}
+
+.neg { color:#b00020; font-weight:bold; }
+.note { font-size:0.85em; color:#7a0000; margin-top:4px; }
+.info { font-size:0.85em; color:#333; margin:6px 0; }
+
+.barOuter {
+  position: relative;
+  height: 16px;
+  background:#eee;
+  border:2px solid #999;
+  margin:4px 0 8px;
+}
+.barSegment {
+  position:absolute;
+  height:100%;
+  top:0;
+}
+
+.bar-ok  { border-color:#999; }
+.bar-bad { border-color:#b00020; }
+
+#stockConfig, #cutLists { display:none; margin-top:20px; }
+</style>
+</head>
+
+<body>
+
+<h2>Material Takeoff & Nesting</h2>
+
+<input type="file" id="fileInput"><br>
+
+<div class="buttonRow">
+  <div class="leftButtons">
+    <button onclick="importBOM()">Import BOM</button>
+    <button onclick="toggleStock()">Configure Stock</button>
+    <button onclick="generateCutLists()">Generate Cut Lists</button>
+  </div>
+
+  <div class="rightButtons">
+    <button onclick="exportCutSheets()" id="exportCutsBtn" disabled>
+  Export Cut Sheets (PDF)
+</button>
+
+<button onclick="exportPurchasingExcel()" id="exportPurchBtn" disabled>
+  Export Purchasing (Excel)
+</button>
+  </div>
+</div>
+
+<label>
+  Kerf (in):
+  <input id="kerfInput" type="number" step="0.001" value="0.125" style="width:70px">
+</label>
+
+<div id="dirtyNotice">
+⚠️ Stock configuration changed — re‑generate cut lists to update results.
+</div>
+
+<div id="stockConfig"></div>
+<div id="output"></div>
+<div id="cutLists"></div>
+
+<script>
+/* =====================================================
+   CONSTANTS & STATE
+   ===================================================== */
+const CUT_COLORS = [
+  "#4a90e2","#7ed321","#f5a623","#bd10e0",
+  "#50e3c2","#e14c4c","#b8e986","#f8e71c"
+];
+const DROP_COLOR = "#cccccc";
+
+let bomRows = [];
+let stockCache = {};
+let stockInitialized = false;
+let lastNestResults = {};
+let diagnostics = {};
+let projectName = "";
+
+/* =====================================================
+   HELPERS
+   ===================================================== */
+function isStructural(desc) {
+  desc = (desc || "").toUpperCase().trim();
+
+  return (
+    desc.startsWith("W ")   ||  // wide flange
+    desc.startsWith("HSS")  ||  // hollow structural section
+    desc.startsWith("L ")   ||  // single angle
+    desc.startsWith("WT ")  ||  // tee from W
+    desc.startsWith("C ")   ||  // channel
+    desc.startsWith("MC ")      // misc channel
+  );
+}
+
+function sizeKey(desc) {
+  return desc.split(",")[0].trim().toUpperCase();
+}
+
+function colorForCut(i) {
+  return CUT_COLORS[i % CUT_COLORS.length];
+}
+
+function markDirty() {
+  dirtyNotice.style.display = "block";
+}
+
+function clearDirty() {
+  dirtyNotice.style.display = "none";
+}
+
+/* =====================================================
+   READ STOCK CONFIG
+   ===================================================== */
+function readStockConfig() {
+  stockCache = {};
+  stockConfig.querySelectorAll("tr").forEach((row, idx) => {
+    if (idx === 0) return;
+
+    const mat = row.cells[0].textContent.trim();
+    stockCache[mat] = [];
+    const inputs = row.querySelectorAll("input");
+
+    for (let i = 0; i < inputs.length; i += 2) {
+      const qtyRaw = inputs[i].value.trim();
+      const lenFt = Number(inputs[i + 1].value);
+      if (!lenFt) continue;
+
+      stockCache[mat].push({
+        qty: qtyRaw === "∞" ? Infinity : Number(qtyRaw) || 0,
+        len: lenFt * 12
+      });
+    }
+  });
+}
+
+/* =====================================================
+   IMPORT BOM
+   ===================================================== */
+function importBOM() {
+  const f = fileInput.files[0];
+  if (!f) return alert("Select a BOM file.");
+
+  const r = new FileReader();
+  r.onload = () => {
+    const wb = XLSX.read(r.result, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const g = XLSX.utils.sheet_to_json(ws, { header: 1 });
+
+    bomRows = [];
+    lastNestResults = {};
+    diagnostics = {};
+
+    // Project name from Excel cell C4
+projectName = (g[3] && g[3][2]) ? String(g[3][2]).trim() : "";
+
+    for (let i = 8; i < g.length; i++) {
+      const row = g[i];
+      if (!row || !isStructural(row[3])) continue;
+      bomRows.push({
+        qty: +row[0],
+        part: row[1],
+        desc: row[3],
+        len: +row[9]
+      });
+    }
+
+    renderSummary();
+    clearDirty();
+  };
+  r.readAsArrayBuffer(f);
+}
+
+/* =====================================================
+   NESTING (PHASES 1 + 2)
+   ===================================================== */
+function nestCuts(cuts, stock, kerf) {
+  cuts.sort((a, b) => b.len - a.len);
+  const bars = [];
+  const maxLen = Math.max(...stock.map(s => s.len));
+
+  cuts.forEach(c => {
+    let placed = false;
+
+    let bestBar = null, bestRem = Infinity;
+    bars.forEach(b => {
+      const need = c.len + (b.cuts.length > 0 ? kerf : 0);
+      if (b.rem >= need && (b.rem - need) < bestRem) {
+        bestRem = b.rem - need;
+        bestBar = b;
+      }
+    });
+
+    if (bestBar) {
+      const need = c.len + (bestBar.cuts.length > 0 ? kerf : 0);
+      bestBar.rem -= need;
+      bestBar.cuts.push(c);
+      placed = true;
+    }
+
+    if (!placed) {
+      const limited = stock.filter(s => s.qty > 0 && s.qty !== Infinity);
+      const fallback = stock.filter(s => s.qty === Infinity);
+      let best = null;
+
+      [limited, fallback].forEach(pool => {
+        if (best) return;
+        pool.forEach(s => {
+          if (s.len >= c.len && (!best || s.len < best.len)) {
+            best = s;
+          }
+        });
+      });
+
+      if (best) {
+        bars.push({ len: best.len, rem: best.len - c.len, cuts: [c] });
+        if (best.qty !== Infinity) best.qty--;
+        placed = true;
+      }
+    }
+
+    if (!placed) {
+      bars.push({
+        len: maxLen,
+        rem: maxLen - c.len,
+        cuts: [c],
+        impossible: c.len > maxLen
+      });
+    }
+  });
+
+  return bars;
+}
+
+/* =====================================================
+   PHASE 3: STOCK RECONCILIATION + DIAGNOSTICS
+   ===================================================== */
+function reconcileStock(material, bars, stock) {
+  diagnostics[material] = { converted: 0 };
+
+  const byLen = {};
+  bars.forEach(b => (byLen[b.len] = (byLen[b.len] || []).concat(b)));
+
+  stock.forEach(s => {
+    if (s.qty === Infinity) return;
+    const used = (byLen[s.len] || []).length;
+    if (used <= s.qty) return;
+
+    const excess = byLen[s.len]
+      .sort((a, b) => b.rem - a.rem)
+      .slice(0, used - s.qty);
+
+    excess.forEach(b => {
+      const fb = stock.find(x => x.qty === Infinity);
+      if (!fb) return;
+      b.len = fb.len;
+      b.rem = fb.len - b.cuts.reduce((s, c) => s + c.len, 0);
+      diagnostics[material].converted++;
+    });
+  });
+}
+
+/* =====================================================
+   SUMMARY WITH FIT STATUS
+   ===================================================== */
+function renderSummary() {
+  const grouped = {};
+  bomRows.forEach(r => {
+    const k = r.desc;
+    grouped[k] = grouped[k] || [];
+    for (let i = 0; i < r.qty; i++) grouped[k].push(r.len);
+  });
+
+
+let html = `
+  ${projectName ? `<h3>Project: ${projectName}</h3>` : ""}
+  <table>
+    <tr>
+      <th>Material</th>
+      <th>Required Length (ft)</th>
+      <th>Bars Used</th>
+      <th>Stock Length Used (ft)</th>
+      <th>Fit Status</th>
+    </tr>`;
+
+
+  for (const m in grouped) {
+    const reqIn = grouped[m].reduce((s, l) => s + l, 0);
+    let bars = "—", stockFt = "—", status = "—", rowClass = "";
+
+    if (lastNestResults[m]) {
+      const arr = lastNestResults[m];
+      const maxBar = Math.max(...arr.map(b => b.len));
+      const tooLong = grouped[m].some(c => c > maxBar);
+
+      if (tooLong) {
+        status = "❌ Cut too long";
+        rowClass = "row-bad";
+      } else if (diagnostics[m]?.converted > 0) {
+        status = "⚠️ Fallback used";
+        rowClass = "row-warn";
+      } else {
+        status = "✅ OK";
+        rowClass = "row-ok";
+      }
+
+      const mix = {};
+      arr.forEach(b => mix[b.len] = (mix[b.len] || 0) + 1);
+      bars = Object.keys(mix)
+        .sort((a, b) => b - a)
+        .map(l => `${mix[l]} × ${(l / 12).toFixed(0)}′`)
+        .join(", ");
+      stockFt = (arr.reduce((s, b) => s + b.len, 0) / 12).toFixed(1);
+    }
+
+    html += `<tr class="${rowClass}">
+      <td>${m}</td>
+      <td>${(reqIn / 12).toFixed(1)}</td>
+      <td>${bars}</td>
+      <td>${stockFt}</td>
+      <td>${status}</td>
+    </tr>`;
+  }
+
+  html += "</table>";
+  output.innerHTML = html;
+}
+
+/* =====================================================
+   CONFIGURE STOCK
+   ===================================================== */
+function toggleStock() {
+  if (!stockInitialized) {
+    const mats = [...new Set(bomRows.map(r => r.desc))];
+    let html = "<h3>Stock Configuration</h3><table><tr><th>Material</th>";
+
+    for (let i = 0; i < 4; i++) html += "<th>Qty</th><th>Len (ft)</th>";
+    html += "</tr>";
+
+    mats.forEach(m => {
+      stockCache[m] = [
+        { qty: Infinity, len: 40 },
+        { qty: "", len: "" },
+        { qty: "", len: "" },
+        { qty: "", len: "" }
+      ];
+      html += `<tr><td>${m}</td>`;
+      stockCache[m].forEach(s => {
+        html += `
+          <td><input value="${s.qty === Infinity ? "∞" : s.qty}" oninput="markDirty()"></td>
+          <td><input value="${s.len}" oninput="markDirty()"></td>`;
+      });
+      html += "</tr>";
+    });
+
+    html += "</table>";
+    stockConfig.innerHTML = html;
+    stockInitialized = true;
+  }
+
+  stockConfig.style.display =
+    stockConfig.style.display === "none" ? "block" : "none";
+}
+
+/* =====================================================
+   GENERATE CUT LISTS
+   ===================================================== */
+function generateCutLists() {
+  readStockConfig();
+  const kerf = parseFloat(kerfInput.value) || 0;
+  let html = "<h3>Cut Lists</h3>";
+
+  lastNestResults = {};
+  diagnostics = {};
+
+  const grouped = {};
+  bomRows.forEach(r => {
+    const k = r.desc;
+    grouped[k] = grouped[k] || [];
+    for (let i = 0; i < r.qty; i++) grouped[k].push({ part: r.part, len: r.len });
+  });
+
+  for (const m in grouped) {
+    const stock = JSON.parse(JSON.stringify(stockCache[m]));
+    const bars = nestCuts(grouped[m], stock, kerf);
+    reconcileStock(m, bars, stock);
+    lastNestResults[m] = bars;
+
+    if (diagnostics[m].converted > 0) {
+      html += `<div class="info">
+        ℹ ${diagnostics[m].converted} bar(s) converted to fallback length to satisfy stock limits
+      </div>`;
+    }
+
+    const mix = {};
+    bars.forEach(b => mix[b.len] = (mix[b.len] || 0) + 1);
+    const mixText = Object.keys(mix)
+      .sort((a, b) => b - a)
+      .map(l => `${mix[l]} × ${(l / 12).toFixed(0)}′`)
+      .join(", ");
+
+    html += `<h4>${m} — ${mixText} (${bars.length} bars)</h4>`;
+
+    bars.forEach((b, i) => {
+      const used = b.cuts.reduce((s, c) => s + c.len, 0);
+      const util = ((used / b.len) * 100).toFixed(1);
+
+      let off = 0;
+      let segs = "";
+      b.cuts.forEach((c, idx) => {
+        const p = (c.len / b.len) * 100;
+        segs += `<div class="barSegment" style="left:${off}%;width:${p}%;background:${colorForCut(idx)}"></div>`;
+        off += p;
+      });
+      segs += `<div class="barSegment" style="left:${off}%;width:${(b.rem / b.len) * 100}%;background:${DROP_COLOR}"></div>`;
+
+      html += `
+      <div class="${b.impossible ? "neg" : ""}">
+        <b>Bar ${i + 1}</b> (${(b.len / 12).toFixed(1)}′)
+        — Drop ${b.rem.toFixed(3)} in
+        — Utilization ${util}%
+        <div class="barOuter ${b.impossible ? "bar-bad" : "bar-ok"}">${segs}</div>
+        <ul>`;
+      b.cuts.forEach(c => html += `<li>${c.part} – ${c.len.toFixed(3)} in</li>`);
+      html += `</ul>`;
+      if (b.impossible) {
+        html += `<div class="note">⚠ Cut exceeds max stock length</div>`;
+      }
+      html += `</div>`;
+    });
+  }
+
+  cutLists.innerHTML = html;
+  cutLists.style.display = "block";
+  renderSummary();
+  clearDirty();
+  document.getElementById("exportCutsBtn").disabled = false;
+document.getElementById("exportPurchBtn").disabled = false;
+}
+/* =====================================================
+   EXPORT CUT SHEETS (PDF via browser print)
+   ===================================================== */
+function exportCutSheets() {
+  if (!Object.keys(lastNestResults).length) {
+    alert("Generate cut lists before exporting cut sheets.");
+    return;
+  }
+
+  const w = window.open("", "_blank");
+
+  // Write document header and styles
+  w.document.write(`
+    <html>
+    <head>
+      <title>Cut Sheets</title>
+      <style>
+        body {
+          font-family: Arial, sans-serif;
+          margin: 24px;
+        }
+        h2 {
+          margin-bottom: 6px;
+        }
+        .project {
+          font-size: 1.1em;
+          margin-bottom: 14px;
+        }
+        .block {
+          margin-bottom: 10px;
+        }
+        ul {
+          margin-top: 6px;
+        }
+        hr {
+          page-break-after: always;
+          border: none;
+        }
+
+        /* Indicator bar styles */
+ .barOuter {
+  position: relative;
+  height: 18px;
+  border: 2px solid #000;
+  background: #f2f2f2;
+  margin: 10px 0 14px;
+
+  /* Force background printing */
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.barSegment {
+  position: absolute;
+  height: 100%;
+  top: 0;
+
+  /* Force background printing */
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+      </style>
+    </head>
+    <body>
+      ${projectName ? `<div class="project"><b>Project:</b> ${projectName}</div>` : ""}
+  `);
+
+  // Loop through materials and bars
+  for (const material in lastNestResults) {
+    lastNestResults[material].forEach((bar, i) => {
+
+      /* -------------------------------
+         Build indicator bar segments
+         ------------------------------- */
+      let offset = 0;
+      let barSegments = "";
+
+      // Cut segments (colored)
+      bar.cuts.forEach((c, idx) => {
+        const pct = (c.len / bar.len) * 100;
+        barSegments += `
+  <div class="barSegment"
+       style="left:${offset}%;
+              width:${pct}%;
+              background:${colorForCut(idx)};
+              display:flex;
+              align-items:center;
+              justify-content:center;
+              font-size:10px;
+              font-weight:bold;
+              color:#000;">
+    ${idx + 1}
+  </div>
+`;
+        offset += pct;
+      });
+
+      // Drop segment (gray)
+      if (bar.rem > 0) {
+        const dropPct = (bar.rem / bar.len) * 100;
+        barSegments += `
+          <div class="barSegment"
+               style="left:${offset}%;
+                      width:${dropPct}%;
+                      background:#cccccc">
+          </div>
+        `;
+      }
+
+      /* -------------------------------
+         Write cut sheet HTML
+         ------------------------------- */
+      w.document.write(`
+        <h2>CUT SHEET</h2>
+
+        <div class="block"><b>Material:</b> ${material}</div>
+        <div class="block"><b>Bar ${i + 1}:</b> ${(bar.len / 12).toFixed(1)}′</div>
+        <div class="block"><b>Drop:</b> ${bar.rem.toFixed(3)} in</div>
+
+        <div class="barOuter">
+          ${barSegments}
+        </div>
+
+        <div class="block">
+          <b>Cuts:</b>
+          <ul>
+      `);
+
+      bar.cuts.forEach((c, idx) => {
+  w.document.write(
+    `<li><b>${idx + 1}.</b> ${c.part} – ${c.len.toFixed(3)} in</li>`
+  );
+});
+
+      w.document.write(`
+          </ul>
+        </div>
+
+        <hr>
+      `);
+    });
+  }
+
+  // Close document and print
+  w.document.write(`
+    </body>
+    </html>
+  `);
+
+  w.document.close();
+  w.focus();
+  w.print();
+}
+/* =====================================================
+   EXPORT PURCHASING LIST (EXCEL)
+   ===================================================== */
+function exportPurchasingExcel() {
+  if (!Object.keys(lastNestResults).length) {
+    alert("Generate cut lists before exporting purchasing.");
+    return;
+  }
+
+  const rows = [];
+
+  // Project heading (row 1)
+  rows.push([projectName || ""]);
+  rows.push([]); // blank row for spacing
+
+  // Header row (row 3)
+  rows.push([
+    "Material",
+    "Stock Length (ft)",
+    "Quantity",
+    "Total Length (ft)",
+    "Notes"
+  ]);
+
+  for (const material in lastNestResults) {
+    const bars = lastNestResults[material];
+
+    // Group bars by stock length (in inches)
+    const byLength = {};
+    bars.forEach(b => {
+      byLength[b.len] = (byLength[b.len] || 0) + 1;
+    });
+
+    for (const lenIn in byLength) {
+      const qty = byLength[lenIn];
+      const lenFt = Number(lenIn) / 12;
+
+      rows.push([
+        material,
+        lenFt,
+        qty,
+        (lenFt * qty).toFixed(1),
+        diagnostics[material]?.converted > 0
+          ? "Fallback stock used"
+          : ""
+      ]);
+    }
+  }
+
+  // Create worksheet and workbook
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Material Order");
+
+  // Merge the project name across the table width
+  ws["!merges"] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 4 } }
+  ];
+
+  // Column widths
+  ws["!cols"] = [
+    { wch: 40 }, // Material
+    { wch: 18 }, // Stock length
+    { wch: 10 }, // Quantity
+    { wch: 18 }, // Total length
+    { wch: 22 }  // Notes
+  ];
+
+  // File name
+  const fname = projectName
+    ? `Material_Purchase_${projectName}.xlsx`
+    : "Material_Purchase.xlsx";
+
+  XLSX.writeFile(wb, fname);
+}
+</script>
+
+</body>
+</html>
