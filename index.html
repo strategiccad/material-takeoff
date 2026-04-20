@@ -48,6 +48,9 @@ th { background: #eee; }
 .note { font-size:0.85em; color:#7a0000; margin-top:4px; }
 .info { font-size:0.85em; color:#333; margin:6px 0; }
 
+
+.overrideBadge{display:none;width:10px;height:10px;border-radius:50%;background:#f5a623;margin-left:6px;vertical-align:middle;}
+.resetBtn{margin-left:10px;font-size:0.85em;padding:2px 6px;}
 .barOuter {
   position: relative;
   height: 16px;
@@ -104,6 +107,11 @@ th { background: #eee; }
   <input id="kerfInput" type="number" step="0.001" value="0.125" style="width:70px">
 </label>
 
+<label style="margin-left:20px;">
+  Typical Drop (ft):
+  <input id="dropLimitInput" type="number" step="1" min="0" value="5" style="width:60px" oninput="markDirty(); refreshStockSuggestions();">
+</label>
+
 <div id="dirtyNotice">
 ⚠️ Stock configuration changed — re‑generate cut lists to update results.
 </div>
@@ -129,6 +137,8 @@ let lastNestResults = {};
 let diagnostics = {};
 let projectName = "";
 
+
+let cutMapGlobal = {};
 /* =====================================================
    HELPERS
    ===================================================== */
@@ -178,7 +188,153 @@ function ensureStockInitialized() {
     toggleStock(); // initializes stock table
   }
 }
-``
+
+// =========================
+// Stock suggestion helpers
+// =========================
+function getDropLimitFt() {
+  const el = document.getElementById("dropLimitInput");
+  const v = el ? Number(el.value) : 5;
+  return (!v || isNaN(v) || v < 0) ? 5 : v;
+}
+
+function roundUpTo5Ft(ft) {
+  return Math.ceil(ft / 5) * 5;
+}
+
+function totalCutLengthFt(cutsInInches) {
+  return cutsInInInches.reduce((s, c) => s + c, 0) / 12;
+}
+
+// Suggest stock length in 5′ increments to target drop ≤ dropLimit.
+// No forced minimum (can be < 40′).
+function suggestedStockLenFtForMaterial(cutsInInches) {
+  const dropLimit = getDropLimitFt();
+  const maxCutIn = cutsInInches.length ? Math.max(...cutsInInches) : 0;
+  const maxCutFt = maxCutIn / 12;
+  const targetFt = maxCutFt + dropLimit;
+  return roundUpTo5Ft(targetFt);
+}
+
+function suggestionNoteForMaterial(cutsInInches, chosenStockFt, suggestedFt, overridden) {
+  const dropLimit = getDropLimitFt();
+  const totalFt = cutsInInches.reduce((s, c) => s + c, 0) / 12;
+  const maxCutFt = (cutsInInches.length ? Math.max(...cutsInInches) : 0) / 12;
+
+  const parts = [];
+  if (chosenStockFt < maxCutFt) {
+    parts.push(`⚠ Length too short for max cut ${maxCutFt.toFixed(1)}′.`);
+  }
+
+  parts.push(`Suggested ${suggestedFt}′ (target drop ≤ ${dropLimit}′, 5′ increments).`);
+  if (overridden) {
+    parts.push(`Override: using ${chosenStockFt}′.`);
+  }
+
+  // Optional heuristic: bar-count change at +5′ (purchasing-style)
+  const barsNow = chosenStockFt > 0 ? Math.ceil(totalFt / chosenStockFt) : 0;
+  const barsPlus5 = (chosenStockFt + 5) > 0 ? Math.ceil(totalFt / (chosenStockFt + 5)) : 0;
+  if (barsNow && barsPlus5 && barsPlus5 < barsNow) {
+    parts.push(`If increased to ${chosenStockFt + 5}′, est. ${barsNow - barsPlus5} fewer bar(s).`);
+  }
+
+  return parts.join(' ');
+}
+
+// Update note + override badge for a single stock row.
+// IMPORTANT: does NOT call markDirty() to avoid false dirty state on first open.
+function updateSuggestionRow(row) {
+  if (!row) return;
+  const material = row.dataset.material;
+  if (!material) return;
+
+  const inputs = row.querySelectorAll('input');
+  if (inputs.length < 2) return;
+
+  const lenInput = inputs[1]; // first Len column
+  const chosenFt = Number(lenInput.value);
+  if (!chosenFt || chosenFt <= 0) return;
+
+  const suggestedFt = Number(row.dataset.suggestedLen || 0);
+  const overridden = suggestedFt ? (chosenFt !== suggestedFt) : false;
+
+  const cuts = cutMapGlobal[material] || [];
+  const note = suggestionNoteForMaterial(cuts, chosenFt, suggestedFt || chosenFt, overridden);
+
+  const noteDiv = row.querySelector('.suggestNote');
+  if (noteDiv) noteDiv.textContent = note;
+
+  const badge = row.querySelector('.overrideBadge');
+  if (badge) badge.style.display = overridden ? 'inline-block' : 'none';
+}
+
+function resetSuggested(row) {
+  if (!row) return;
+  const suggestedFt = Number(row.dataset.suggestedLen || 0);
+  if (!suggestedFt) return;
+
+  const inputs = row.querySelectorAll('input');
+  if (inputs.length < 2) return;
+
+  const lenInput = inputs[1];
+  lenInput.value = suggestedFt;
+  updateSuggestionRow(row);
+  markDirty();
+}
+
+// Recompute suggested lengths when the drop target changes.
+// If the user hasn't overridden (current == old suggested), update the input.
+function refreshStockSuggestions() {
+  if (!stockInitialized) return;
+
+  const rows = stockConfig.querySelectorAll('tr[data-material]');
+  rows.forEach(row => {
+    const material = row.dataset.material;
+    const cuts = cutMapGlobal[material] || [];
+    const newSuggested = suggestedStockLenFtForMaterial(cuts);
+
+    const inputs = row.querySelectorAll('input');
+    if (inputs.length < 2) return;
+
+    const lenInput = inputs[1];
+    const currentFt = Number(lenInput.value);
+    const oldSuggested = Number(row.dataset.suggestedLen || 0);
+
+    if (oldSuggested && currentFt === oldSuggested) {
+      lenInput.value = newSuggested;
+    }
+
+    row.dataset.suggestedLen = String(newSuggested);
+    updateSuggestionRow(row);
+  });
+}
+
+// Purchasing notes: fallback + override
+function purchasingNotesForMaterial(material) {
+  const parts = [];
+
+  if (diagnostics[material] && diagnostics[material].converted > 0) {
+    parts.push('Fallback stock used');
+  }
+
+  const cuts = cutMapGlobal[material] || [];
+  const suggested = suggestedStockLenFtForMaterial(cuts);
+
+  // Read configured default length from current stockCache (in inches)
+  const configuredIn = (stockCache[material] && stockCache[material][0] && stockCache[material][0].len)
+    ? Number(stockCache[material][0].len)
+    : null;
+
+  if (configuredIn && suggested) {
+    const configuredFt = configuredIn / 12;
+    if (Math.abs(configuredFt - suggested) > 1e-6) {
+      parts.push(`Override stock: ${configuredFt.toFixed(0)}′ (suggested ${suggested}′)`);
+    }
+  }
+
+  return parts.join('; ');
+}
+
 
 /* =====================================================
    READ STOCK CONFIG
@@ -188,7 +344,7 @@ function readStockConfig() {
   stockConfig.querySelectorAll("tr").forEach((row, idx) => {
     if (idx === 0) return;
 
-    const mat = row.cells[0].textContent.trim();
+    const mat = row.dataset.material || row.cells[0].textContent.trim();
     stockCache[mat] = [];
     const inputs = row.querySelectorAll("input");
 
@@ -409,24 +565,53 @@ let html = `
 function toggleStock() {
   if (!stockInitialized) {
     const mats = [...new Set(bomRows.map(r => r.desc))];
-    let html = "<h3>Stock Configuration</h3><table><tr><th>Material</th>";
 
+    // Build cut map (in inches) for suggestions
+    cutMapGlobal = {};
+    bomRows.forEach(r => {
+      cutMapGlobal[r.desc] = cutMapGlobal[r.desc] || [];
+      for (let i = 0; i < r.qty; i++) {
+        cutMapGlobal[r.desc].push(r.len);
+      }
+    });
+
+    let html = "<h3>Stock Configuration</h3><table><tr><th>Material</th>";
     for (let i = 0; i < 4; i++) html += "<th>Qty</th><th>Len (ft)</th>";
     html += "</tr>";
 
     mats.forEach(m => {
+      const cuts = cutMapGlobal[m] || [];
+      const suggestedLenFt = suggestedStockLenFtForMaterial(cuts);
+      const note = suggestionNoteForMaterial(cuts, suggestedLenFt, suggestedLenFt, false);
+
       stockCache[m] = [
-        { qty: Infinity, len: 40 },
+        { qty: Infinity, len: suggestedLenFt },
         { qty: "", len: "" },
         { qty: "", len: "" },
         { qty: "", len: "" }
       ];
-      html += `<tr><td>${m}</td>`;
-      stockCache[m].forEach(s => {
+
+      html += `<tr data-material="${m}" data-suggested-len="${suggestedLenFt}"><td>
+        ${m}
+        <span class="overrideBadge" title="Stock length overridden"></span>
+        <button type="button" class="resetBtn" onclick="resetSuggested(this.closest('tr'))">Reset</button>
+        <div class="info suggestNote" style="margin-top:4px;">${note}</div>
+      </td>`;
+
+      stockCache[m].forEach((s, idx) => {
         html += `
-          <td><input value="${s.qty === Infinity ? "∞" : s.qty}" oninput="markDirty()"></td>
+          <td><input value="${s.qty === Infinity ? "∞" : s.qty}" oninput="markDirty()"></td>`;
+
+        if (idx === 0) {
+          // Default length column updates note/badge and marks dirty
+          html += `
+          <td><input value="${s.len}" oninput="markDirty(); updateSuggestionRow(this.closest('tr'))"></td>`;
+        } else {
+          html += `
           <td><input value="${s.len}" oninput="markDirty()"></td>`;
+        }
       });
+
       html += "</tr>";
     });
 
@@ -435,7 +620,10 @@ function toggleStock() {
     stockInitialized = true;
   }
 
-stockConfig.style.display = "block";
+  stockConfig.style.display = "block";
+
+  // Update suggested values and note text to match current drop target
+  refreshStockSuggestions();
 }
 
 /* =====================================================
@@ -712,9 +900,7 @@ function exportPurchasingExcel() {
         lenFt,
         qty,
         (lenFt * qty).toFixed(1),
-        diagnostics[material]?.converted > 0
-          ? "Fallback stock used"
-          : ""
+        purchasingNotesForMaterial(material)
       ]);
     }
   }
