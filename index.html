@@ -578,7 +578,20 @@ const r = new FileReader();
       });
     }
 
-    document.getElementById("exportCutsBtn").disabled = true;
+    
+
+  // --- STOCK_REFRESH_ON_IMPORT: force rebuild stock config for new BOM ---
+  stockInitialized = false;
+  stockCache = {};
+  cutMapGlobal = {};
+  stockConfig.innerHTML = "";
+  stockConfig.style.display = "block";
+  toggleStock();
+
+  // --- CUTLIST_HIDE_ON_IMPORT: hide stale cut list until Generate Cut Lists is pressed ---
+  cutLists.innerHTML = "";
+  cutLists.style.display = "none";
+document.getElementById("exportCutsBtn").disabled = true;
     document.getElementById("exportPurchBtn").disabled = true;
 
     renderSummary();
