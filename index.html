@@ -188,7 +188,7 @@ async function loadAiscWpf() {
   aiscWpfLoadAttempted = true;
 
   try {
-    const res = await fetch("./aisc_wpf_v16.json?v=20260421, { cache: "no-store" });
+    const res = await fetch("./aisc_wpf_v16.json", { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     aiscWpf = await res.json();
     console.log(`AISC WPF loaded: ${Object.keys(aiscWpf).length} shapes`);
@@ -202,19 +202,14 @@ async function loadAiscWpf() {
 
 function toAiscKey(materialDesc) {
   if (!materialDesc) return "";
-
-  // Keep only the shape portion (drop grade/spec after comma)
+  // Only use portion before comma (drops grade/spec for lookup)
   let s = String(materialDesc).split(",")[0].trim().toUpperCase();
-
-  // Normalize x separators
+  // Normalize X separators
   s = s.replace(/\s*X\s*/g, "X");
-
   // Convert mixed numbers: "2 1/2" -> "2-1/2"
   s = s.replace(/(\d+)\s+(\d+)\/(\d+)/g, "$1-$2/$3");
-
   // Remove remaining spaces
   s = s.replace(/\s+/g, "");
-
   return s;
 }
 
@@ -1030,3 +1025,4 @@ function exportPurchasingExcel() {
 
 </body>
 </html>
+``
