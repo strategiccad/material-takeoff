@@ -3,156 +3,147 @@
 <head>
 <meta charset="UTF-8">
 <title>Material Takeoff & Nesting</title>
-
 <!-- SheetJS -->
 <script src="./xlsx.full.min.js"></script>
-
 <style>
 body { font-family: Arial, sans-serif; margin: 20px; }
 button, input { margin: 6px 6px 6px 0; }
-
 table { border-collapse: collapse; width: 100%; margin-top: 12px; }
 th, td { border: 1px solid #999; padding: 6px; }
 th { background: #eee; }
-
-.row-ok   { background: #f0fbf0; }
+.row-ok { background: #f0fbf0; }
 .row-warn { background: #fff6e5; }
-.row-bad  { background: #fdecea; }
-
+.row-bad { background: #fdecea; }
 .buttonRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
+ display: flex;
+ align-items: center;
+ justify-content: space-between;
+ margin-bottom: 10px;
 }
-
 .leftButtons button {
-  margin-right: 6px;
+ margin-right: 6px;
 }
-
 .rightButtons button {
-  margin-left: 12px;
+ margin-left: 12px;
 }
-
 #dirtyNotice {
-  display: none;
-  margin-top: 10px;
-  padding: 8px;
-  border: 1px solid #b00020;
-  color: #b00020;
-  font-weight: bold;
-  background: #fff5f5;
+ display: none;
+ margin-top: 10px;
+ padding: 8px;
+ border: 1px solid #b00020;
+ color: #b00020;
+ font-weight: bold;
+ background: #fff5f5;
 }
-
 .neg { color:#b00020; font-weight:bold; }
 .note { font-size:0.85em; color:#7a0000; margin-top:4px; }
 .info { font-size:0.85em; color:#333; margin:6px 0; }
-
 .overrideBadge{display:none;width:10px;height:10px;border-radius:50%;background:#f5a623;margin-left:6px;vertical-align:middle;}
 .resetBtn{margin-left:10px;font-size:0.85em;padding:2px 6px;}
-
 .barOuter {
-  position: relative;
-  height: 16px;
-  background:#eee;
-  border:2px solid #999;
-  margin:4px 0 8px;
+ position: relative;
+ height: 16px;
+ background:#eee;
+ border:2px solid #999;
+ margin:4px 0 8px;
 }
 .barSegment {
-  position:absolute;
-  height:100%;
-  top:0;
+ position:absolute;
+ height:100%;
+ top:0;
 }
-
-.bar-ok  { border-color:#999; }
+.bar-ok { border-color:#999; }
 .bar-bad { border-color:#b00020; }
-
 #stockConfig, #cutLists { display:none; margin-top:20px; }
-
 .rightButtons{
-  display:flex;
-  align-items:flex-start;
-  gap:12px;
+ display:flex;
+ align-items:flex-start;
+ gap:12px;
 }
 #brandBox{
-  display:flex;
-  flex-direction:column;
-  align-items:flex-end;
-  gap:4px;
+ display:flex;
+ flex-direction:column;
+ align-items:flex-end;
+ gap:4px;
 }
 #brandLogo{
-  max-width:220px;
-  max-height:60px;
-  width:auto;
-  height:auto;
-  object-fit:contain;
+ max-width:220px;
+ max-height:60px;
+ width:auto;
+ height:auto;
+ object-fit:contain;
 }
 #logoNote{
-  font-size:0.75em;
-  color:#7a0000;
-  display:none;
+ font-size:0.75em;
+ color:#7a0000;
+ display:none;
 }
 
+/* Status line */
+#statusLine{
+  margin: 6px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-left-width: 4px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+.status{ background:#f7f7f7; color:#333; border-left-color:#999; }
+.status-info{ background:#f3f8ff; border-left-color:#4a90e2; }
+.status-ok{ background:#f0fbf0; border-left-color:#2e7d32; }
+.status-warn{ background:#fff6e5; border-left-color:#f5a623; }
+.status-error{ background:#fdecea; border-left-color:#b00020; }
 </style>
 </head>
-
 <body>
-
 <h2>Material Takeoff & Nesting</h2>
 <div class="info" id="appMeta"></div>
+<div id="statusLine" class="status status-info">Ready. No BOM loaded.</div>
 
 <input
-  type="file"
-  id="fileInput"
-  accept=".xlsx,.xlsm,.xls"
+ type="file"
+ id="fileInput"
+ accept=".xlsx,.xlsm,.xls"
 /><br>
-
 <div class="buttonRow">
-  <div class="leftButtons">
-    <button onclick="importBOM()">Import BOM</button>
-    <button onclick="toggleStock()">Configure Stock</button>
-    <button onclick="stockConfig.style.display='none'">Hide Stock Configuration</button>
-    <button onclick="generateCutLists()">Generate Cut Lists</button>
-  </div>
-
-  <div class="rightButtons">
- <div id="brandBox">
-  <img id="brandLogo" alt="Client logo">
-  <div id="logoNote"></div>
+ <div class="leftButtons">
+ <button onclick="importBOM()">Import BOM</button>
+ <button onclick="toggleStock()">Configure Stock</button>
+ <button onclick="stockConfig.style.display='none'">Hide Stock Configuration</button>
+ <button onclick="generateCutLists()">Generate Cut Lists</button>
  </div>
-    <button onclick="exportCutSheets()" id="exportCutsBtn" disabled>Export Cut Sheets (PDF)</button>
-    <button onclick="exportPurchasingExcel()" id="exportPurchBtn" disabled>Export Purchasing (Excel)</button>
-  </div>
+ <div class="rightButtons">
+ <div id="brandBox">
+ <img id="brandLogo" alt="Client logo">
+ <div id="logoNote"></div>
+ </div>
+ <button onclick="exportCutSheets()" id="exportCutsBtn" disabled>Export Cut Sheets (PDF)</button>
+ <button onclick="exportPurchasingExcel()" id="exportPurchBtn" disabled>Export Purchasing (Excel)</button>
+ </div>
 </div>
-
 <label>
-  Kerf (in):
-  <input id="kerfInput" type="number" step="0.001" value="0.125" style="width:70px">
+ Kerf (in):
+ <input id="kerfInput" type="number" step="0.001" value="0.125" style="width:70px">
 </label>
-
 <label style="margin-left:20px;">
-  Typical Drop (ft):
-  <input id="dropLimitInput" type="number" step="1" min="0" value="5" style="width:60px" oninput="markDirty(); refreshStockSuggestions();">
+ Typical Drop (ft):
+ <input id="dropLimitInput" type="number" step="1" min="0" value="5" style="width:60px" oninput="markDirty(); refreshStockSuggestions();">
 </label>
-
 <div id="dirtyNotice">
 ⚠️ Stock configuration changed — re‑generate cut lists to update results.
 </div>
-
 <div id="stockConfig"></div>
 <div id="output"></div>
 <div id="cutLists"></div>
-
 <script>
 /* =====================================================
-   CONSTANTS & STATE
-   ===================================================== */
+ CONSTANTS & STATE
+ ===================================================== */
 const CUT_COLORS = [
-  "#4a90e2","#7ed321","#f5a623","#bd10e0",
-  "#50e3c2","#e14c4c","#b8e986","#f8e71c"
+ "#4a90e2","#7ed321","#f5a623","#bd10e0",
+ "#50e3c2","#e14c4c","#b8e986","#f8e71c"
 ];
 const DROP_COLOR = "#cccccc";
-
 let bomRows = [];
 let stockCache = {};
 let stockInitialized = false;
@@ -160,10 +151,8 @@ let lastNestResults = {};
 let diagnostics = {};
 let projectName = "";
 let cutMapGlobal = {};
-
 let aiscWpf = null;
 let aiscWpfLoadAttempted = false;
-
 // =========================
 // Version + Disclaimer
 // =========================
@@ -171,997 +160,841 @@ const APP_NAME = "Material Takeoff & Nesting";
 const APP_VERSION = "v1.0.0";
 const APP_BUILD_DATE = "2026-04-21";
 const DISCLAIMER_TEXT = "This tool automates takeoff and cut optimization. While automation can reduce effort, results may contain errors. Always verify all generated quantities, lengths, and weights against the project documents and shop standards before ordering or fabrication.";
-
 // Cache-bust AISC lookup while keeping the filename exactly: aisc_wpf_v16.json
 const AISC_JSON_URL = `./aisc_wpf_v16.json?v=${encodeURIComponent(APP_VERSION)}`;
-
 // =========================
 // Branding (logo by BOM filename prefix)
 // =========================
 const LOGO_MAP = {
-  AMI: `./logo_AMI.png?v=${encodeURIComponent(APP_VERSION)}`,
-  BCI: `./logo_BCI.png?v=${encodeURIComponent(APP_VERSION)}`,
-  SCC: `./logo_SCC.png?v=${encodeURIComponent(APP_VERSION)}`
+ AMI: `./logo_AMI.png?v=${encodeURIComponent(APP_VERSION)}`,
+ BCI: `./logo_BCI.png?v=${encodeURIComponent(APP_VERSION)}`,
+ SCC: `./logo_SCC.png?v=${encodeURIComponent(APP_VERSION)}`
 };
-
 function setBrandFromFilename(fileName) {
-  const img = document.getElementById("brandLogo");
-  const note = document.getElementById("logoNote");
-  if (!img || !note) return;
-
-  note.style.display = "none";
-  note.textContent = "";
-
-  const code = (fileName || "").slice(0, 3).toUpperCase();
-  const desired = LOGO_MAP[code];
-  const fallback = LOGO_MAP.SCC;
-  const firstTry = desired || fallback;
-
-  img.onerror = () => {
-    // If first try fails and we aren't already on fallback, switch to SCC and show note
-    if (img.src && !img.src.includes('logo_SCC.png')) {
-      img.src = fallback;
-      note.textContent = `Logo not found for ${code || 'project'} — using SCC.`;
-      note.style.display = "block";
-    } else {
-      note.textContent = `Logo not found — using SCC.`;
-      note.style.display = "block";
-    }
-  };
-
-  img.src = firstTry;
+ const img = document.getElementById("brandLogo");
+ const note = document.getElementById("logoNote");
+ if (!img || !note) return;
+ note.style.display = "none";
+ note.textContent = "";
+ const code = (fileName || "").slice(0, 3).toUpperCase();
+ const desired = LOGO_MAP[code];
+ const fallback = LOGO_MAP.SCC;
+ const firstTry = desired || fallback;
+ img.onerror = () => {
+ // If first try fails and we aren't already on fallback, switch to SCC and show note
+ if (img.src && !img.src.includes('logo_SCC.png')) {
+ img.src = fallback;
+ note.textContent = `Logo not found for ${code || 'project'} — using SCC.`;
+ note.style.display = "block";
+ } else {
+ note.textContent = `Logo not found — using SCC.`;
+ note.style.display = "block";
+ }
+ };
+ img.src = firstTry;
 }
-
-
 document.addEventListener('DOMContentLoaded', () => {
-  const el = document.getElementById('appMeta');
-  if (el) el.textContent = `${APP_NAME} ${APP_VERSION} (Build ${APP_BUILD_DATE})`;
-  // Default logo (SCC) until BOM is imported
-  setBrandFromFilename('');
+ const el = document.getElementById('appMeta');
+ if (el) el.textContent = `${APP_NAME} ${APP_VERSION} (Build ${APP_BUILD_DATE})`;
+ // Default logo (SCC) until BOM is imported
+ setBrandFromFilename('');
 });
 
-
-
 /* =====================================================
-   HELPERS
-   ===================================================== */
+ HELPERS
+ ===================================================== */
 function isStructural(desc) {
-  desc = (desc || "").toUpperCase().trim();
-
-  return (
-    desc.startsWith("W ")   ||  // wide flange
-    desc.startsWith("HSS")  ||  // hollow structural section
-    desc.startsWith("TS ")  ||  // tube (treated like HSS)
-    desc.startsWith("PIPE ")||  // pipe (weight may be unknown)
-    desc.startsWith("FB ")  ||  // flat bar
-    desc.startsWith("L ")   ||  // angle
-    desc.startsWith("WT ")  ||  // tee
-    desc.startsWith("C ")   ||  // channel
-    desc.startsWith("MC ")      // misc channel
-  );
+ desc = (desc || "").toUpperCase().trim();
+ return (
+ desc.startsWith("W ") // wide flange
+ || desc.startsWith("HSS") // hollow structural section
+ || desc.startsWith("TS ") // tube (treated like HSS)
+ || desc.startsWith("PIPE ") // pipe (weight may be unknown)
+ || desc.startsWith("FB ") // flat bar
+ || desc.startsWith("L ") // angle
+ || desc.startsWith("WT ") // tee
+ || desc.startsWith("C ") // channel
+ || desc.startsWith("MC ") // misc channel
+ );
 }
-
 function isExcelFile(file) {
-  const name = file.name.toLowerCase();
-  return (
-    name.endsWith(".xlsx") ||
-    name.endsWith(".xlsm") ||
-    name.endsWith(".xls")
-  );
+ const name = file.name.toLowerCase();
+ return (
+ name.endsWith(".xlsx")
+ || name.endsWith(".xlsm")
+ || name.endsWith(".xls")
+ );
 }
-
 function colorForCut(i) {
-  return CUT_COLORS[i % CUT_COLORS.length];
+ return CUT_COLORS[i % CUT_COLORS.length];
 }
-
 function markDirty() {
-  dirtyNotice.style.display = "block";
+ dirtyNotice.style.display = "block";
+}
+function clearDirty() {
+ dirtyNotice.style.display = "none";
 }
 
-function clearDirty() {
-  dirtyNotice.style.display = "none";
+function setStatus(message, level) {
+  const el = document.getElementById('statusLine');
+  if (!el) return;
+  const lvl = (level || 'info').toLowerCase();
+  el.className = 'status status-' + lvl;
+  el.textContent = message;
 }
 
 function ensureStockInitialized() {
-  if (!stockInitialized) {
-    toggleStock();
-  }
+ if (!stockInitialized) {
+ toggleStock();
+ }
 }
-
 // -------------------------
 // AISC WPF lookup (Option A)
 // -------------------------
 async function loadAiscWpf() {
-  if (aiscWpf || aiscWpfLoadAttempted) return !!aiscWpf;
-  aiscWpfLoadAttempted = true;
-
-  try {
-    const res = await fetch(AISC_JSON_URL, { cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    aiscWpf = await res.json();
-    console.log(`AISC WPF loaded: ${Object.keys(aiscWpf).length} shapes`);
-    return true;
-  } catch (e) {
-    console.warn("AISC WPF lookup not loaded (falling back to geometry weights):", e);
-    aiscWpf = null;
-    return false;
-  }
+ if (aiscWpf || aiscWpfLoadAttempted) return !!aiscWpf;
+ aiscWpfLoadAttempted = true;
+ try {
+ const res = await fetch(AISC_JSON_URL, { cache: "no-store" });
+ if (!res.ok) throw new Error(`HTTP ${res.status}`);
+ aiscWpf = await res.json();
+ console.log(`AISC WPF loaded: ${Object.keys(aiscWpf).length} shapes`);
+ return true;
+ } catch (e) {
+ console.warn("AISC WPF lookup not loaded (falling back to geometry weights):", e);
+ aiscWpf = null;
+ return false;
+ }
 }
-
 function toAiscKey(materialDesc) {
-  if (!materialDesc) return "";
-  // Only use portion before comma (drops grade/spec for lookup)
-  let s = String(materialDesc).split(",")[0].trim().toUpperCase();
-  // Normalize X separators
-  s = s.replace(/\s*X\s*/g, "X");
-  // Convert mixed numbers: "2 1/2" -> "2-1/2"
-  s = s.replace(/(\d+)\s+(\d+)\/(\d+)/g, "$1-$2/$3");
-  // Remove remaining spaces
-  s = s.replace(/\s+/g, "");
-  return s;
+ if (!materialDesc) return "";
+ // Only use portion before comma (drops grade/spec for lookup)
+ let s = String(materialDesc).split(",")[0].trim().toUpperCase();
+ // Normalize X separators
+ s = s.replace(/\s*X\s*/g, "X");
+ // Convert mixed numbers: "2 1/2" -> "2-1/2"
+ s = s.replace(/(\d+)\s+(\d+)\/(\d+)/g, "$1-$2/$3");
+ // Remove remaining spaces
+ s = s.replace(/\s+/g, "");
+ return s;
 }
-
 function weightLbPerFtAisc(materialDesc) {
-  if (!aiscWpf) return null;
-  const key = toAiscKey(materialDesc);
-  const w = aiscWpf[key];
-  return (typeof w === "number") ? w : null;
+ if (!aiscWpf) return null;
+ const key = toAiscKey(materialDesc);
+ const w = aiscWpf[key];
+ return (typeof w === "number") ? w : null;
 }
-
 // =========================
 // Stock suggestion helpers
 // =========================
 function getDropLimitFt() {
-  const el = document.getElementById("dropLimitInput");
-  const v = el ? Number(el.value) : 5;
-  return (!v || isNaN(v) || v < 0) ? 5 : v;
+ const el = document.getElementById("dropLimitInput");
+ const v = el ? Number(el.value) : 5;
+ return (!v || isNaN(v) || v < 0) ? 5 : v;
 }
-
 function roundUpTo5Ft(ft) {
-  return Math.ceil(ft / 5) * 5;
+ return Math.ceil(ft / 5) * 5;
 }
-
 // Enforce minimum suggestion of 20′.
 function clampMinSuggestedFt(ft) {
-  return ft < 20 ? 20 : ft;
+ return ft < 20 ? 20 : ft;
 }
-
 function totalCutLengthFt(cutsInInches) {
-  return cutsInInches.reduce((s, c) => s + c, 0) / 12;
+ return cutsInInches.reduce((s, c) => s + c, 0) / 12;
 }
-
 // Suggest stock length in 5′ increments to target drop ≤ dropLimit.
 // Minimum 20′.
 function suggestedStockLenFtForMaterial(cutsInInches) {
-  const dropLimit = getDropLimitFt();
-  const maxCutIn = cutsInInches.length ? Math.max(...cutsInInches) : 0;
-  const maxCutFt = maxCutIn / 12;
-  const targetFt = maxCutFt + dropLimit;
-  return clampMinSuggestedFt(roundUpTo5Ft(targetFt));
+ const dropLimit = getDropLimitFt();
+ const maxCutIn = cutsInInches.length ? Math.max(...cutsInInches) : 0;
+ const maxCutFt = maxCutIn / 12;
+ const targetFt = maxCutFt + dropLimit;
+ return clampMinSuggestedFt(roundUpTo5Ft(targetFt));
 }
-
 function suggestionNoteForMaterial(cutsInInches, chosenStockFt, suggestedFt, overridden) {
-  const dropLimit = getDropLimitFt();
-  const totalFt = totalCutLengthFt(cutsInInches);
-  const maxCutFt = (cutsInInches.length ? Math.max(...cutsInInches) : 0) / 12;
-
-  const parts = [];
-  if (suggestedFt <= 20) {
-    parts.push("Min suggestion 20′ applied.");
-  }
-  if (chosenStockFt < maxCutFt) {
-    parts.push(`⚠ Length too short for max cut ${maxCutFt.toFixed(1)}′.`);
-  }
-  parts.push(`Suggested ${suggestedFt}′ (target drop ≤ ${dropLimit}′, 5′ increments).`);
-  if (overridden) {
-    parts.push(`Override: using ${chosenStockFt}′.`);
-  }
-
-  const barsNow = chosenStockFt > 0 ? Math.ceil(totalFt / chosenStockFt) : 0;
-  const barsPlus5 = (chosenStockFt + 5) > 0 ? Math.ceil(totalFt / (chosenStockFt + 5)) : 0;
-  if (barsNow && barsPlus5 && barsPlus5 < barsNow) {
-    parts.push(`If increased to ${chosenStockFt + 5}′, est. ${barsNow - barsPlus5} fewer bar(s).`);
-  }
-
-  return parts.join(" ");
+ const dropLimit = getDropLimitFt();
+ const totalFt = totalCutLengthFt(cutsInInches);
+ const maxCutFt = (cutsInInches.length ? Math.max(...cutsInInches) : 0) / 12;
+ const parts = [];
+ if (suggestedFt <= 20) {
+ parts.push("Min suggestion 20′ applied.");
+ }
+ if (chosenStockFt < maxCutFt) {
+ parts.push(`⚠ Length too short for max cut ${maxCutFt.toFixed(1)}′.`);
+ }
+ parts.push(`Suggested ${suggestedFt}′ (target drop ≤ ${dropLimit}′, 5′ increments).`);
+ if (overridden) {
+ parts.push(`Override: using ${chosenStockFt}′.`);
+ }
+ const barsNow = chosenStockFt > 0 ? Math.ceil(totalFt / chosenStockFt) : 0;
+ const barsPlus5 = (chosenStockFt + 5) > 0 ? Math.ceil(totalFt / (chosenStockFt + 5)) : 0;
+ if (barsNow && barsPlus5 && barsPlus5 < barsNow) {
+ parts.push(`If increased to ${chosenStockFt + 5}′, est. ${barsNow - barsPlus5} fewer bar(s).`);
+ }
+ return parts.join(" ");
 }
-
 // Update note + override badge for a single stock row.
 // IMPORTANT: does NOT call markDirty() to avoid false dirty state on first open.
 function updateSuggestionRow(row) {
-  if (!row) return;
-  const material = row.dataset.material;
-  if (!material) return;
-
-  const inputs = row.querySelectorAll("input");
-  if (inputs.length < 2) return;
-
-  const lenInput = inputs[1];
-  const chosenFt = Number(lenInput.value);
-  if (!chosenFt || chosenFt <= 0) return;
-
-  const suggestedFt = Number(row.dataset.suggestedLen || 0);
-  const overridden = suggestedFt ? (chosenFt !== suggestedFt) : false;
-
-  const cuts = cutMapGlobal[material] || [];
-  const note = suggestionNoteForMaterial(cuts, chosenFt, suggestedFt || chosenFt, overridden);
-
-  const noteDiv = row.querySelector(".suggestNote");
-  if (noteDiv) noteDiv.textContent = note;
-
-  const badge = row.querySelector(".overrideBadge");
-  if (badge) badge.style.display = overridden ? "inline-block" : "none";
+ if (!row) return;
+ const material = row.dataset.material;
+ if (!material) return;
+ const inputs = row.querySelectorAll("input");
+ if (inputs.length < 2) return;
+ const lenInput = inputs[1];
+ const chosenFt = Number(lenInput.value);
+ if (!chosenFt || chosenFt <= 0) return;
+ const suggestedFt = Number(row.dataset.suggestedLen || 0);
+ const overridden = suggestedFt ? (chosenFt !== suggestedFt) : false;
+ const cuts = cutMapGlobal[material] || [];
+ const note = suggestionNoteForMaterial(cuts, chosenFt, suggestedFt || chosenFt, overridden);
+ const noteDiv = row.querySelector(".suggestNote");
+ if (noteDiv) noteDiv.textContent = note;
+ const badge = row.querySelector(".overrideBadge");
+ if (badge) badge.style.display = overridden ? "inline-block" : "none";
 }
-
 function resetSuggested(row) {
-  if (!row) return;
-  const suggestedFt = Number(row.dataset.suggestedLen || 0);
-  if (!suggestedFt) return;
-
-  const inputs = row.querySelectorAll("input");
-  if (inputs.length < 2) return;
-
-  const lenInput = inputs[1];
-  lenInput.value = suggestedFt;
-  updateSuggestionRow(row);
-  markDirty();
+ if (!row) return;
+ const suggestedFt = Number(row.dataset.suggestedLen || 0);
+ if (!suggestedFt) return;
+ const inputs = row.querySelectorAll("input");
+ if (inputs.length < 2) return;
+ const lenInput = inputs[1];
+ lenInput.value = suggestedFt;
+ updateSuggestionRow(row);
+ markDirty();
 }
-
 // Recompute suggested lengths when the drop target changes.
 // If the user hasn't overridden (current == old suggested), update the input.
 function refreshStockSuggestions() {
-  if (!stockInitialized) return;
-
-  const rows = stockConfig.querySelectorAll("tr[data-material]");
-  rows.forEach(row => {
-    const material = row.dataset.material;
-    const cuts = cutMapGlobal[material] || [];
-    const newSuggested = suggestedStockLenFtForMaterial(cuts);
-
-    const inputs = row.querySelectorAll("input");
-    if (inputs.length < 2) return;
-
-    const lenInput = inputs[1];
-    const currentFt = Number(lenInput.value);
-    const oldSuggested = Number(row.dataset.suggestedLen || 0);
-
-    if (oldSuggested && currentFt === oldSuggested) {
-      lenInput.value = newSuggested;
-    }
-
-    row.dataset.suggestedLen = String(newSuggested);
-    updateSuggestionRow(row);
-  });
+ if (!stockInitialized) return;
+ const rows = stockConfig.querySelectorAll("tr[data-material]");
+ rows.forEach(row => {
+ const material = row.dataset.material;
+ const cuts = cutMapGlobal[material] || [];
+ const newSuggested = suggestedStockLenFtForMaterial(cuts);
+ const inputs = row.querySelectorAll("input");
+ if (inputs.length < 2) return;
+ const lenInput = inputs[1];
+ const currentFt = Number(lenInput.value);
+ const oldSuggested = Number(row.dataset.suggestedLen || 0);
+ if (oldSuggested && currentFt === oldSuggested) {
+ lenInput.value = newSuggested;
+ }
+ row.dataset.suggestedLen = String(newSuggested);
+ updateSuggestionRow(row);
+ });
 }
-
 // -------------------------
 // Weight calculations (fallback B)
 // -------------------------
 const STEEL_DENSITY_LB_PER_FT3 = 490;
 const LB_PER_FT_FROM_AREA_IN2 = STEEL_DENSITY_LB_PER_FT3 / 144;
-
 function floatOrFrac(val) {
-  if (typeof val === "number") return val;
-  const s = String(val).trim();
-  if (s.includes("/")) {
-    const [a, b] = s.split("/");
-    const na = Number(a), nb = Number(b);
-    return nb ? na / nb : NaN;
-  }
-  return Number(s);
+ if (typeof val === "number") return val;
+ const s = String(val).trim();
+ if (s.includes("/")) {
+ const [a, b] = s.split("/");
+ const na = Number(a), nb = Number(b);
+ return nb ? na / nb : NaN;
+ }
+ return Number(s);
 }
-
 function weightLbPerFtFromArea(areaIn2) {
-  return areaIn2 * LB_PER_FT_FROM_AREA_IN2;
+ return areaIn2 * LB_PER_FT_FROM_AREA_IN2;
 }
-
 // Parse W/WT/C/MC weight from designation (e.g., W 10x30 -> 30 lb/ft)
 function parseShapeWeightFromName(desc) {
-  const d = (desc || "").toUpperCase();
-  const m = d.match(/\b(WT|W|C|MC)\s*\d+(?:\.\d+)?\s*[X]\s*(\d+(?:\.\d+)?)/);
-  if (m) return Number(m[2]);
-  return null;
+ const d = (desc || "").toUpperCase();
+ const m = d.match(/\b(WT|W|C|MC)\s*\d+(?:\.\d+)?\s*[X]\s*(\d+(?:\.\d+)?)/);
+ if (m) return Number(m[2]);
+ return null;
 }
-
 function weightLbPerFtFallback(desc) {
-  const encoded = parseShapeWeightFromName(desc);
-  if (encoded) return encoded;
-
-  const d = (desc || "").toUpperCase();
-
-  let m = d.match(/\b(HSS|TS)\s*(\d+(?:\.\d+)?)\s*X\s*(\d+(?:\.\d+)?)\s*X\s*([0-9]+(?:\/[0-9]+)?|\d+(?:\.\d+)?)/);
-  if (m) {
-    const b = floatOrFrac(m[2]);
-    const h = floatOrFrac(m[3]);
-    const t = floatOrFrac(m[4]);
-    if (b > 0 && h > 0 && t > 0 && 2 * t < b && 2 * t < h) {
-      const area = (b * h) - ((b - 2 * t) * (h - 2 * t));
-      return weightLbPerFtFromArea(area);
-    }
-  }
-
-  m = d.match(/\bL\s*(\d+(?:\.\d+)?|\d+)\s*X\s*(\d+(?:\.\d+)?|\d+)\s*X\s*([0-9]+(?:\/[0-9]+)?|\d+(?:\.\d+)?)/);
-  if (m) {
-    const a = floatOrFrac(m[1]);
-    const b = floatOrFrac(m[2]);
-    const t = floatOrFrac(m[3]);
-    if (a > 0 && b > 0 && t > 0) {
-      const area = t * (a + b - t);
-      return weightLbPerFtFromArea(area);
-    }
-  }
-
-  m = d.match(/\bFB\s*(\d+(?:\.\d+)?)\s*X\s*([0-9]+(?:\/[0-9]+)?|\d+(?:\.\d+)?)/);
-  if (m) {
-    const w = floatOrFrac(m[1]);
-    const t = floatOrFrac(m[2]);
-    if (w > 0 && t > 0) return weightLbPerFtFromArea(w * t);
-  }
-
-  if (d.startsWith("PIPE")) return null;
-
-  return null;
+ const encoded = parseShapeWeightFromName(desc);
+ if (encoded) return encoded;
+ const d = (desc || "").toUpperCase();
+ let m = d.match(/\b(HSS|TS)\s*(\d+(?:\.\d+)?)\s*X\s*(\d+(?:\.\d+)?)\s*X\s*([0-9]+(?:\/[0-9]+)?|\d+(?:\.\d+)?)/);
+ if (m) {
+ const b = floatOrFrac(m[2]);
+ const h = floatOrFrac(m[3]);
+ const t = floatOrFrac(m[4]);
+ if (b > 0 && h > 0 && t > 0 && 2 * t < b && 2 * t < h) {
+ const area = (b * h) - ((b - 2 * t) * (h - 2 * t));
+ return weightLbPerFtFromArea(area);
+ }
+ }
+ m = d.match(/\bL\s*(\d+(?:\.\d+)?|\d+)\s*X\s*(\d+(?:\.\d+)?|\d+)\s*X\s*([0-9]+(?:\/[0-9]+)?|\d+(?:\.\d+)?)/);
+ if (m) {
+ const a = floatOrFrac(m[1]);
+ const b = floatOrFrac(m[2]);
+ const t = floatOrFrac(m[3]);
+ if (a > 0 && b > 0 && t > 0) {
+ const area = t * (a + b - t);
+ return weightLbPerFtFromArea(area);
+ }
+ }
+ m = d.match(/\bFB\s*(\d+(?:\.\d+)?)\s*X\s*([0-9]+(?:\/[0-9]+)?|\d+(?:\.\d+)?)/);
+ if (m) {
+ const w = floatOrFrac(m[1]);
+ const t = floatOrFrac(m[2]);
+ if (w > 0 && t > 0) return weightLbPerFtFromArea(w * t);
+ }
+ if (d.startsWith("PIPE")) return null;
+ return null;
 }
-
 // Weight per foot with AISC-table exact lookup first, fallback to geometry parser.
 function weightLbPerFt(desc) {
-  const aisc = weightLbPerFtAisc(desc);
-  if (aisc) return aisc;
-  return weightLbPerFtFallback(desc);
+ const aisc = weightLbPerFtAisc(desc);
+ if (aisc) return aisc;
+ return weightLbPerFtFallback(desc);
 }
-
 /* =====================================================
-   READ STOCK CONFIG (data-material safe)
-   ===================================================== */
+ READ STOCK CONFIG (data-material safe)
+ ===================================================== */
 function readStockConfig() {
-  stockCache = {};
-  stockConfig.querySelectorAll("tr").forEach((row, idx) => {
-    if (idx === 0) return;
-
-    const mat = row.dataset.material || row.cells[0].textContent.trim();
-    stockCache[mat] = [];
-    const inputs = row.querySelectorAll("input");
-
-    for (let i = 0; i < inputs.length; i += 2) {
-      const qtyRaw = inputs[i].value.trim();
-      const lenFt = Number(inputs[i + 1].value);
-      if (!lenFt) continue;
-
-      stockCache[mat].push({
-        qty: qtyRaw === "∞" ? Infinity : Number(qtyRaw) || 0,
-        len: lenFt * 12
-      });
-    }
-  });
+ stockCache = {};
+ stockConfig.querySelectorAll("tr").forEach((row, idx) => {
+ if (idx === 0) return;
+ const mat = row.dataset.material || row.cells[0].textContent.trim();
+ stockCache[mat] = [];
+ const inputs = row.querySelectorAll("input");
+ for (let i = 0; i < inputs.length; i += 2) {
+ const qtyRaw = inputs[i].value.trim();
+ const lenFt = Number(inputs[i + 1].value);
+ if (!lenFt) continue;
+ stockCache[mat].push({
+ qty: qtyRaw === "∞" ? Infinity : Number(qtyRaw) || 0,
+ len: lenFt * 12
+ });
+ }
+ });
 }
-
 /* =====================================================
-   IMPORT BOM
-   ===================================================== */
+ IMPORT BOM
+ ===================================================== */
 function importBOM() {
-  const f = fileInput.files[0];
-  if (!f) return alert("Select a BOM file.");
+ const f = fileInput.files[0];
+ if (!f) return alert("Select a BOM file.");
+ if (!isExcelFile(f)) {
+ alert("Invalid file type. Please select an Excel file (.xlsx, .xlsm, or .xls).");
+ fileInput.value = "";
+ return;
+ }
+ // Set logo based on BOM filename prefix (first 3 letters)
+ setBrandFromFilename(f.name);
 
-  if (!isExcelFile(f)) {
-    alert("Invalid file type. Please select an Excel file (.xlsx, .xlsm, or .xls).");
-    fileInput.value = "";
-    return;
-  }
+ // Status: begin import
+ setStatus("Loading BOM: " + f.name + " …", "info");
 
-  
-  // Set logo based on BOM filename prefix (first 3 letters)
-  setBrandFromFilename(f.name);
-const r = new FileReader();
-  r.onload = () => {
-    const wb = XLSX.read(r.result, { type: "array" });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const g = XLSX.utils.sheet_to_json(ws, { header: 1 });
+ const r = new FileReader();
+ r.onerror = () => {
+   setStatus("Error reading BOM file: " + f.name + ".", "error");
+ };
 
-    bomRows = [];
-    lastNestResults = {};
-    diagnostics = {};
+ r.onload = () => {
+ const wb = XLSX.read(r.result, { type: "array" });
+ const ws = wb.Sheets[wb.SheetNames[0]];
+ const g = XLSX.utils.sheet_to_json(ws, { header: 1 });
+ bomRows = [];
+ lastNestResults = {};
+ diagnostics = {};
+ // Project name from Excel cell C4
+ projectName = (g[3] && g[3][2]) ? String(g[3][2]).trim() : "";
+ // Load AISC WPF lookup (non-blocking; falls back if unavailable)
+ loadAiscWpf().then(() => { try { renderSummary(); } catch(e) {} });
+ for (let i = 8; i < g.length; i++) {
+ const row = g[i];
+ if (!row || !isStructural(row[3])) continue;
+ bomRows.push({
+ qty: +row[0],
+ part: row[1],
+ desc: row[3],
+ len: +row[9]
+ });
+ }
 
-    // Project name from Excel cell C4
-    projectName = (g[3] && g[3][2]) ? String(g[3][2]).trim() : "";
+ // --- STOCK_REFRESH_ON_IMPORT: force rebuild stock config for new BOM ---
+ stockInitialized = false;
+ stockCache = {};
+ cutMapGlobal = {};
+ stockConfig.innerHTML = "";
+ stockConfig.style.display = "block";
+ toggleStock();
 
-    // Load AISC WPF lookup (non-blocking; falls back if unavailable)
-    loadAiscWpf().then(() => { try { renderSummary(); } catch(e) {} });
+ // --- CUTLIST_HIDE_ON_IMPORT: hide stale cut list until Generate Cut Lists is pressed ---
+ cutLists.innerHTML = "";
+ cutLists.style.display = "none";
 
-    for (let i = 8; i < g.length; i++) {
-      const row = g[i];
-      if (!row || !isStructural(row[3])) continue;
-      bomRows.push({
-        qty: +row[0],
-        part: row[1],
-        desc: row[3],
-        len: +row[9]
-      });
-    }
+ // Status: completed import
+ const uniqueMaterials = Array.from(new Set(bomRows.map(r => r.desc))).length;
+ const proj = projectName ? projectName : "—";
+ setStatus(
+   "Loaded BOM: " + f.name +
+   " — " + bomRows.length + " line(s), " + uniqueMaterials + " material(s). " +
+   "Stock refreshed; cut list cleared. Project: " + proj +
+   ". (" + new Date().toLocaleString() + ")",
+   "ok"
+ );
 
-    
-
-  // --- STOCK_REFRESH_ON_IMPORT: force rebuild stock config for new BOM ---
-  stockInitialized = false;
-  stockCache = {};
-  cutMapGlobal = {};
-  stockConfig.innerHTML = "";
-  stockConfig.style.display = "block";
-  toggleStock();
-
-  // --- CUTLIST_HIDE_ON_IMPORT: hide stale cut list until Generate Cut Lists is pressed ---
-  cutLists.innerHTML = "";
-  cutLists.style.display = "none";
-document.getElementById("exportCutsBtn").disabled = true;
-    document.getElementById("exportPurchBtn").disabled = true;
-
-    renderSummary();
-    clearDirty();
-  };
-  r.readAsArrayBuffer(f);
+ document.getElementById("exportCutsBtn").disabled = true;
+ document.getElementById("exportPurchBtn").disabled = true;
+ renderSummary();
+ clearDirty();
+ };
+ r.readAsArrayBuffer(f);
 }
-
 /* =====================================================
-   NESTING (PHASES 1 + 2)
-   ===================================================== */
+ NESTING (PHASES 1 + 2)
+ ===================================================== */
 function nestCuts(cuts, stock, kerf) {
-  cuts.sort((a, b) => b.len - a.len);
-  const bars = [];
-  const maxLen = Math.max(...stock.map(s => s.len));
-
-  cuts.forEach(c => {
-    let placed = false;
-
-    let bestBar = null, bestRem = Infinity;
-    bars.forEach(b => {
-      const need = c.len + (b.cuts.length > 0 ? kerf : 0);
-      if (b.rem >= need && (b.rem - need) < bestRem) {
-        bestRem = b.rem - need;
-        bestBar = b;
-      }
-    });
-
-    if (bestBar) {
-      const need = c.len + (bestBar.cuts.length > 0 ? kerf : 0);
-      bestBar.rem -= need;
-      bestBar.cuts.push(c);
-      placed = true;
-    }
-
-    if (!placed) {
-      const limited = stock.filter(s => s.qty > 0 && s.qty !== Infinity);
-      const fallback = stock.filter(s => s.qty === Infinity);
-      let best = null;
-
-      [limited, fallback].forEach(pool => {
-        if (best) return;
-        pool.forEach(s => {
-          if (s.len >= c.len && (!best || s.len < best.len)) {
-            best = s;
-          }
-        });
-      });
-
-      if (best) {
-        bars.push({ len: best.len, rem: best.len - c.len, cuts: [c] });
-        if (best.qty !== Infinity) best.qty--;
-        placed = true;
-      }
-    }
-
-    if (!placed) {
-      bars.push({
-        len: maxLen,
-        rem: maxLen - c.len,
-        cuts: [c],
-        impossible: c.len > maxLen
-      });
-    }
-  });
-
-  return bars;
+ cuts.sort((a, b) => b.len - a.len);
+ const bars = [];
+ const maxLen = Math.max(...stock.map(s => s.len));
+ cuts.forEach(c => {
+ let placed = false;
+ let bestBar = null, bestRem = Infinity;
+ bars.forEach(b => {
+ const need = c.len + (b.cuts.length > 0 ? kerf : 0);
+ if (b.rem >= need && (b.rem - need) < bestRem) {
+ bestRem = b.rem - need;
+ bestBar = b;
+ }
+ });
+ if (bestBar) {
+ const need = c.len + (bestBar.cuts.length > 0 ? kerf : 0);
+ bestBar.rem -= need;
+ bestBar.cuts.push(c);
+ placed = true;
+ }
+ if (!placed) {
+ const limited = stock.filter(s => s.qty > 0 && s.qty !== Infinity);
+ const fallback = stock.filter(s => s.qty === Infinity);
+ let best = null;
+ [limited, fallback].forEach(pool => {
+ if (best) return;
+ pool.forEach(s => {
+ if (s.len >= c.len && (!best || s.len < best.len)) {
+ best = s;
+ }
+ });
+ });
+ if (best) {
+ bars.push({ len: best.len, rem: best.len - c.len, cuts: [c] });
+ if (best.qty !== Infinity) best.qty--;
+ placed = true;
+ }
+ }
+ if (!placed) {
+ bars.push({
+ len: maxLen,
+ rem: maxLen - c.len,
+ cuts: [c],
+ impossible: c.len > maxLen
+ });
+ }
+ });
+ return bars;
 }
-
 /* =====================================================
-   PHASE 3: STOCK RECONCILIATION + DIAGNOSTICS
-   ===================================================== */
+ PHASE 3: STOCK RECONCILIATION + DIAGNOSTICS
+ ===================================================== */
 function reconcileStock(material, bars, stock) {
-  diagnostics[material] = { converted: 0 };
-
-  const byLen = {};
-  bars.forEach(b => (byLen[b.len] = (byLen[b.len] || []).concat(b)));
-
-  stock.forEach(s => {
-    if (s.qty === Infinity) return;
-    const used = (byLen[s.len] || []).length;
-    if (used <= s.qty) return;
-
-    const excess = byLen[s.len]
-      .sort((a, b) => b.rem - a.rem)
-      .slice(0, used - s.qty);
-
-    excess.forEach(b => {
-      const fb = stock.find(x => x.qty === Infinity);
-      if (!fb) return;
-      b.len = fb.len;
-      b.rem = fb.len - b.cuts.reduce((s, c) => s + c.len, 0);
-      diagnostics[material].converted++;
-    });
-  });
+ diagnostics[material] = { converted: 0 };
+ const byLen = {};
+ bars.forEach(b => (byLen[b.len] = (byLen[b.len] || []).concat(b)));
+ stock.forEach(s => {
+ if (s.qty === Infinity) return;
+ const used = (byLen[s.len] || []).length;
+ if (used <= s.qty) return;
+ const excess = byLen[s.len]
+ .sort((a, b) => b.rem - a.rem)
+ .slice(0, used - s.qty);
+ excess.forEach(b => {
+ const fb = stock.find(x => x.qty === Infinity);
+ if (!fb) return;
+ b.len = fb.len;
+ b.rem = fb.len - b.cuts.reduce((s, c) => s + c.len, 0);
+ diagnostics[material].converted++;
+ });
+ });
 }
-
 /* =====================================================
-   SUMMARY WITH FIT STATUS + PURCHASED WEIGHT
-   ===================================================== */
+ SUMMARY WITH FIT STATUS + PURCHASED WEIGHT
+ ===================================================== */
 function renderSummary() {
-  const grouped = {};
-  bomRows.forEach(r => {
-    const k = r.desc;
-    grouped[k] = grouped[k] || [];
-    for (let i = 0; i < r.qty; i++) grouped[k].push(r.len);
-  });
-
-  // Total weight based on purchased stock length (bars used)
-  let totalLb = 0;
-  let unknownWeightCount = 0;
-
-  let html = `
-    ${projectName ? `<h3>Project: ${projectName}</h3>` : ""}
-    <table>
-      <tr>
-        <th>Material</th>
-        <th>Required Length (ft)</th>
-        <th>Bars Used</th>
-        <th>Stock Length Used (ft)</th>
-        <th>Fit Status</th>
-        <th>Weight (lb)</th>
-        <th>Weight (tons)</th>
-      </tr>`;
-
-  for (const m in grouped) {
-    const reqIn = grouped[m].reduce((s, l) => s + l, 0);
-    const reqFt = reqIn / 12;
-
-    let bars = "—", stockFt = "—", status = "—", rowClass = "";
-    let purchasedFt = 0;
-
-    if (lastNestResults[m]) {
-      const arr = lastNestResults[m];
-      const maxBar = Math.max(...arr.map(b => b.len));
-      const tooLong = grouped[m].some(c => c > maxBar);
-
-      if (tooLong) {
-        status = "❌ Cut too long";
-        rowClass = "row-bad";
-      } else if (diagnostics[m]?.converted > 0) {
-        status = "⚠️ Fallback used";
-        rowClass = "row-warn";
-      } else {
-        status = "✅ OK";
-        rowClass = "row-ok";
-      }
-
-      const mix = {};
-      arr.forEach(b => (mix[b.len] = (mix[b.len] || 0) + 1));
-      bars = Object.keys(mix)
-        .sort((a, b) => b - a)
-        .map(l => `${mix[l]} × ${(l / 12).toFixed(0)}′`)
-        .join(", ");
-
-      purchasedFt = arr.reduce((s, b) => s + b.len, 0) / 12;
-      stockFt = purchasedFt.toFixed(1);
-    }
-
-    const wpf = weightLbPerFt(m);
-    let wLb = "—";
-    let wTon = "—";
-
-    if (wpf && purchasedFt > 0) {
-      const matLb = wpf * purchasedFt;
-      totalLb += matLb;
-      wLb = matLb.toFixed(0);
-      wTon = (matLb / 2000).toFixed(2);
-    } else if (!wpf) {
-      unknownWeightCount++;
-    }
-
-    html += `<tr class="${rowClass}">
-      <td>${m}</td>
-      <td>${reqFt.toFixed(1)}</td>
-      <td>${bars}</td>
-      <td>${stockFt}</td>
-      <td>${status}</td>
-      <td>${wLb}</td>
-      <td>${wTon}</td>
-    </tr>`;
-  }
-
-  html += `</table>`;
-
-  if (totalLb > 0 || unknownWeightCount > 0) {
-    html = `
-      ${projectName ? `<h3>Project: ${projectName}</h3>` : ""}
-      <div class="info">
-        <b>Total Weight (Purchased):</b> ${totalLb.toFixed(0)} lb (${(totalLb / 2000).toFixed(2)} tons)
-        ${unknownWeightCount ? `<br><span class="note">⚠ Weight unknown for ${unknownWeightCount} material(s) (PIPE or unparsed shapes).</span>` : ""}
-      </div>` + html.replace(projectName ? `<h3>Project: ${projectName}</h3>` : "", "");
-  }
-
-  output.innerHTML = html;
+ const grouped = {};
+ bomRows.forEach(r => {
+ const k = r.desc;
+ grouped[k] = grouped[k] || [];
+ for (let i = 0; i < r.qty; i++) grouped[k].push(r.len);
+ });
+ // Total weight based on purchased stock length (bars used)
+ let totalLb = 0;
+ let unknownWeightCount = 0;
+ let html = `
+ ${projectName ? `<h3>Project: ${projectName}</h3>` : ""}
+ <table>
+ <tr>
+ <th>Material</th>
+ <th>Required Length (ft)</th>
+ <th>Bars Used</th>
+ <th>Stock Length Used (ft)</th>
+ <th>Fit Status</th>
+ <th>Weight (lb)</th>
+ <th>Weight (tons)</th>
+ </tr>`;
+ for (const m in grouped) {
+ const reqIn = grouped[m].reduce((s, l) => s + l, 0);
+ const reqFt = reqIn / 12;
+ let bars = "—", stockFt = "—", status = "—", rowClass = "";
+ let purchasedFt = 0;
+ if (lastNestResults[m]) {
+ const arr = lastNestResults[m];
+ const maxBar = Math.max(...arr.map(b => b.len));
+ const tooLong = grouped[m].some(c => c > maxBar);
+ if (tooLong) {
+ status = "❌ Cut too long";
+ rowClass = "row-bad";
+ } else if (diagnostics[m]?.converted > 0) {
+ status = "⚠️ Fallback used";
+ rowClass = "row-warn";
+ } else {
+ status = "✅ OK";
+ rowClass = "row-ok";
+ }
+ const mix = {};
+ arr.forEach(b => (mix[b.len] = (mix[b.len] || 0) + 1));
+ bars = Object.keys(mix)
+ .sort((a, b) => b - a)
+ .map(l => `${mix[l]} × ${(l / 12).toFixed(0)}′`)
+ .join(", ");
+ purchasedFt = arr.reduce((s, b) => s + b.len, 0) / 12;
+ stockFt = purchasedFt.toFixed(1);
+ }
+ const wpf = weightLbPerFt(m);
+ let wLb = "—";
+ let wTon = "—";
+ if (wpf && purchasedFt > 0) {
+ const matLb = wpf * purchasedFt;
+ totalLb += matLb;
+ wLb = matLb.toFixed(0);
+ wTon = (matLb / 2000).toFixed(2);
+ } else if (!wpf) {
+ unknownWeightCount++;
+ }
+ html += `<tr class="${rowClass}">
+ <td>${m}</td>
+ <td>${reqFt.toFixed(1)}</td>
+ <td>${bars}</td>
+ <td>${stockFt}</td>
+ <td>${status}</td>
+ <td>${wLb}</td>
+ <td>${wTon}</td>
+ </tr>`;
+ }
+ html += `</table>`;
+ if (totalLb > 0 || unknownWeightCount > 0) {
+ html = `
+ ${projectName ? `<h3>Project: ${projectName}</h3>` : ""}
+ <div class="info">
+ <b>Total Weight (Purchased):</b> ${totalLb.toFixed(0)} lb (${(totalLb / 2000).toFixed(2)} tons)
+ ${unknownWeightCount ? `<br><span class="note">⚠ Weight unknown for ${unknownWeightCount} material(s) (PIPE or unparsed shapes).</span>` : ""}
+ </div>` + html.replace(projectName ? `<h3>Project: ${projectName}</h3>` : "", "");
+ }
+ output.innerHTML = html;
 }
-
 /* =====================================================
-   CONFIGURE STOCK (with suggestions, override badge, reset)
-   ===================================================== */
+ CONFIGURE STOCK (with suggestions, override badge, reset)
+ ===================================================== */
 function toggleStock() {
-  if (!stockInitialized) {
-    const mats = [...new Set(bomRows.map(r => r.desc))];
-
-    cutMapGlobal = {};
-    bomRows.forEach(r => {
-      cutMapGlobal[r.desc] = cutMapGlobal[r.desc] || [];
-      for (let i = 0; i < r.qty; i++) cutMapGlobal[r.desc].push(r.len);
-    });
-
-    let html = "<h3>Stock Configuration</h3><table><tr><th>Material</th>";
-    for (let i = 0; i < 4; i++) html += "<th>Qty</th><th>Len (ft)</th>";
-    html += "</tr>";
-
-    mats.forEach(m => {
-      const cuts = cutMapGlobal[m] || [];
-      const suggestedLenFt = suggestedStockLenFtForMaterial(cuts);
-      const note = suggestionNoteForMaterial(cuts, suggestedLenFt, suggestedLenFt, false);
-
-      stockCache[m] = [
-        { qty: Infinity, len: suggestedLenFt },
-        { qty: "", len: "" },
-        { qty: "", len: "" },
-        { qty: "", len: "" }
-      ];
-
-      html += `<tr data-material="${m}" data-suggested-len="${suggestedLenFt}"><td>
-        ${m}
-        <span class="overrideBadge" title="Stock length overridden"></span>
-        <button type="button" class="resetBtn" onclick="resetSuggested(this.closest('tr'))">Reset</button>
-        <div class="info suggestNote" style="margin-top:4px;">${note}</div>
-      </td>`;
-
-      stockCache[m].forEach((s, idx) => {
-        html += `
-          <td><input value="${s.qty === Infinity ? "∞" : s.qty}" oninput="markDirty()"></td>`;
-
-        if (idx === 0) {
-          html += `
-          <td><input value="${s.len}" oninput="markDirty(); updateSuggestionRow(this.closest('tr'))"></td>`;
-        } else {
-          html += `
-          <td><input value="${s.len}" oninput="markDirty()"></td>`;
-        }
-      });
-
-      html += "</tr>";
-    });
-
-    html += "</table>";
-    stockConfig.innerHTML = html;
-    stockInitialized = true;
-  }
-
-  stockConfig.style.display = "block";
-  refreshStockSuggestions();
+ if (!stockInitialized) {
+ const mats = [...new Set(bomRows.map(r => r.desc))];
+ cutMapGlobal = {};
+ bomRows.forEach(r => {
+ cutMapGlobal[r.desc] = cutMapGlobal[r.desc] || [];
+ for (let i = 0; i < r.qty; i++) cutMapGlobal[r.desc].push(r.len);
+ });
+ let html = "<h3>Stock Configuration</h3><table><tr><th>Material</th>";
+ for (let i = 0; i < 4; i++) html += "<th>Qty</th><th>Len (ft)</th>";
+ html += "</tr>";
+ mats.forEach(m => {
+ const cuts = cutMapGlobal[m] || [];
+ const suggestedLenFt = suggestedStockLenFtForMaterial(cuts);
+ const note = suggestionNoteForMaterial(cuts, suggestedLenFt, suggestedLenFt, false);
+ stockCache[m] = [
+ { qty: Infinity, len: suggestedLenFt },
+ { qty: "", len: "" },
+ { qty: "", len: "" },
+ { qty: "", len: "" }
+ ];
+ html += `<tr data-material="${m}" data-suggested-len="${suggestedLenFt}"><td>
+ ${m}
+ <span class="overrideBadge" title="Stock length overridden"></span>
+ <button type="button" class="resetBtn" onclick="resetSuggested(this.closest('tr'))">Reset</button>
+ <div class="info suggestNote" style="margin-top:4px;">${note}</div>
+ </td>`;
+ stockCache[m].forEach((s, idx) => {
+ html += `
+ <td><input value="${s.qty === Infinity ? "∞" : s.qty}" oninput="markDirty()"></td>`;
+ if (idx === 0) {
+ html += `
+ <td><input value="${s.len}" oninput="markDirty(); updateSuggestionRow(this.closest('tr'))"></td>`;
+ } else {
+ html += `
+ <td><input value="${s.len}" oninput="markDirty()"></td>`;
+ }
+ });
+ html += "</tr>";
+ });
+ html += "</table>";
+ stockConfig.innerHTML = html;
+ stockInitialized = true;
+ }
+ stockConfig.style.display = "block";
+ refreshStockSuggestions();
 }
-
 /* =====================================================
-   GENERATE CUT LISTS
-   ===================================================== */
+ GENERATE CUT LISTS
+ ===================================================== */
 function generateCutLists() {
-  ensureStockInitialized();
-
-  // Ensure AISC WPF is loaded if available (non-blocking)
-  loadAiscWpf();
-
-  readStockConfig();
-  const kerf = parseFloat(kerfInput.value) || 0;
-  let html = "<h3>Cut Lists</h3>";
-
-  lastNestResults = {};
-  diagnostics = {};
-
-  const grouped = {};
-  bomRows.forEach(r => {
-    const k = r.desc;
-    grouped[k] = grouped[k] || [];
-    for (let i = 0; i < r.qty; i++) grouped[k].push({ part: r.part, len: r.len });
-  });
-
-  for (const m in grouped) {
-    const stock = JSON.parse(JSON.stringify(stockCache[m]));
-    const bars = nestCuts(grouped[m], stock, kerf);
-    reconcileStock(m, bars, stock);
-    lastNestResults[m] = bars;
-
-    if (diagnostics[m].converted > 0) {
-      html += `<div class="info">
-        ℹ ${diagnostics[m].converted} bar(s) converted to fallback length to satisfy stock limits
-      </div>`;
-    }
-
-    const mix = {};
-    bars.forEach(b => (mix[b.len] = (mix[b.len] || 0) + 1));
-    const mixText = Object.keys(mix)
-      .sort((a, b) => b - a)
-      .map(l => `${mix[l]} × ${(l / 12).toFixed(0)}′`)
-      .join(", ");
-
-    html += `<h4>${m} — ${mixText} (${bars.length} bars)</h4>`;
-
-    bars.forEach((b, i) => {
-      const used = b.cuts.reduce((s, c) => s + c.len, 0);
-      const util = ((used / b.len) * 100).toFixed(1);
-
-      let off = 0;
-      let segs = "";
-      b.cuts.forEach((c, idx) => {
-        const p = (c.len / b.len) * 100;
-        segs += `<div class="barSegment" style="left:${off}%;width:${p}%;background:${colorForCut(idx)}"></div>`;
-        off += p;
-      });
-      segs += `<div class="barSegment" style="left:${off}%;width:${(b.rem / b.len) * 100}%;background:${DROP_COLOR}"></div>`;
-
-      html += `
-      <div class="${b.impossible ? "neg" : ""}">
-        <b>Bar ${i + 1}</b> (${(b.len / 12).toFixed(1)}′)
-        — Drop ${b.rem.toFixed(3)} in
-        — Utilization ${util}%
-        <div class="barOuter ${b.impossible ? "bar-bad" : "bar-ok"}">${segs}</div>
-        <ul>`;
-      b.cuts.forEach(c => (html += `<li>${c.part} – ${c.len.toFixed(3)} in</li>`));
-      html += `</ul>`;
-      if (b.impossible) {
-        html += `<div class="note">⚠ Cut exceeds max stock length</div>`;
-      }
-      html += `</div>`;
-    });
-  }
-
-  cutLists.innerHTML = html;
-  cutLists.style.display = "block";
-  renderSummary();
-  clearDirty();
-
-  document.getElementById("exportCutsBtn").disabled = false;
-  document.getElementById("exportPurchBtn").disabled = false;
+ ensureStockInitialized();
+ // Ensure AISC WPF is loaded if available (non-blocking)
+ loadAiscWpf();
+ readStockConfig();
+ const kerf = parseFloat(kerfInput.value) || 0;
+ let html = "<h3>Cut Lists</h3>";
+ lastNestResults = {};
+ diagnostics = {};
+ const grouped = {};
+ bomRows.forEach(r => {
+ const k = r.desc;
+ grouped[k] = grouped[k] || [];
+ for (let i = 0; i < r.qty; i++) grouped[k].push({ part: r.part, len: r.len });
+ });
+ for (const m in grouped) {
+ const stock = JSON.parse(JSON.stringify(stockCache[m]));
+ const bars = nestCuts(grouped[m], stock, kerf);
+ reconcileStock(m, bars, stock);
+ lastNestResults[m] = bars;
+ if (diagnostics[m].converted > 0) {
+ html += `<div class="info">
+ ℹ ${diagnostics[m].converted} bar(s) converted to fallback length to satisfy stock limits
+ </div>`;
+ }
+ const mix = {};
+ bars.forEach(b => (mix[b.len] = (mix[b.len] || 0) + 1));
+ const mixText = Object.keys(mix)
+ .sort((a, b) => b - a)
+ .map(l => `${mix[l]} × ${(l / 12).toFixed(0)}′`)
+ .join(", ");
+ html += `<h4>${m} — ${mixText} (${bars.length} bars)</h4>`;
+ bars.forEach((b, i) => {
+ const used = b.cuts.reduce((s, c) => s + c.len, 0);
+ const util = ((used / b.len) * 100).toFixed(1);
+ let off = 0;
+ let segs = "";
+ b.cuts.forEach((c, idx) => {
+ const p = (c.len / b.len) * 100;
+ segs += `<div class="barSegment" style="left:${off}%;width:${p}%;background:${colorForCut(idx)}"></div>`;
+ off += p;
+ });
+ segs += `<div class="barSegment" style="left:${off}%;width:${(b.rem / b.len) * 100}%;background:${DROP_COLOR}"></div>`;
+ html += `
+ <div class="${b.impossible ? "neg" : ""}">
+ <b>Bar ${i + 1}</b> (${(b.len / 12).toFixed(1)}′)
+ — Drop ${b.rem.toFixed(3)} in
+ — Utilization ${util}%
+ <div class="barOuter ${b.impossible ? "bar-bad" : "bar-ok"}">${segs}</div>
+ <ul>`;
+ b.cuts.forEach(c => (html += `<li>${c.part} – ${c.len.toFixed(3)} in</li>`));
+ html += `</ul>`;
+ if (b.impossible) {
+ html += `<div class="note">⚠ Cut exceeds max stock length</div>`;
+ }
+ html += `</div>`;
+ });
+ }
+ cutLists.innerHTML = html;
+ cutLists.style.display = "block";
+ renderSummary();
+ clearDirty();
+ document.getElementById("exportCutsBtn").disabled = false;
+ document.getElementById("exportPurchBtn").disabled = false;
 }
-
 /* =====================================================
-   EXPORT CUT SHEETS (PDF via browser print)
-   ===================================================== */
+ EXPORT CUT SHEETS (PDF via browser print)
+ ===================================================== */
 function exportCutSheets() {
-  if (!Object.keys(lastNestResults).length) {
-    alert("Generate cut lists before exporting cut sheets.");
-    return;
-  }
-
-  const w = window.open("", "_blank");
-
-  w.document.write(`
-    <html>
-    <head>
-      <title>Cut Sheets</title>
-      <style>
-        body { font-family: Arial, sans-serif; margin: 24px; }
-        h2 { margin-bottom: 6px; }
-        .project { font-size: 1.1em; margin-bottom: 14px; }
-        .block { margin-bottom: 10px; }
-        ul { margin-top: 6px; }
-        hr { page-break-after: always; border: none; }
-
-        .barOuter {
-          position: relative;
-          height: 18px;
-          border: 2px solid #000;
-          background: #f2f2f2;
-          margin: 10px 0 14px;
-          -webkit-print-color-adjust: exact;
-          print-color-adjust: exact;
-        }
-        .barSegment {
-          position: absolute;
-          height: 100%;
-          top: 0;
-          -webkit-print-color-adjust: exact;
-          print-color-adjust: exact;
-        }
-      
-.rightButtons{
-  display:flex;
-  align-items:flex-start;
-  gap:12px;
+ if (!Object.keys(lastNestResults).length) {
+ alert("Generate cut lists before exporting cut sheets.");
+ return;
+ }
+ const w = window.open("", "_blank");
+ w.document.write(`
+ <html>
+ <head>
+ <title>Cut Sheets</title>
+ <style>
+ body { font-family: Arial, sans-serif; margin: 24px; }
+ h2 { margin-bottom: 6px; }
+ .project { font-size: 1.1em; margin-bottom: 14px; }
+ .block { margin-bottom: 10px; }
+ ul { margin-top: 6px; }
+ hr { page-break-after: always; border: none; }
+ .barOuter {
+ position: relative;
+ height: 18px;
+ border: 2px solid #000;
+ background: #f2f2f2;
+ margin: 10px 0 14px;
+ -webkit-print-color-adjust: exact;
+ print-color-adjust: exact;
+ }
+ .barSegment {
+ position: absolute;
+ height: 100%;
+ top: 0;
+ -webkit-print-color-adjust: exact;
+ print-color-adjust: exact;
+ }
+ </style>
+ </head>
+ <body>
+ ${projectName ? `<div class="project"><b>Project:</b> ${projectName}</div>` : ""}
+ <div class="project"><b>Generated by:</b> ${APP_NAME} ${APP_VERSION} (Build ${APP_BUILD_DATE})</div>
+ <div class="project"><b>Disclaimer:</b> ${DISCLAIMER_TEXT}</div>
+ `);
+ for (const material in lastNestResults) {
+ lastNestResults[material].forEach((bar, i) => {
+ let offset = 0;
+ let barSegments = "";
+ bar.cuts.forEach((c, idx) => {
+ const pct = (c.len / bar.len) * 100;
+ barSegments += `
+ <div class="barSegment"
+ style="left:${offset}%;
+ width:${pct}%;
+ background:${colorForCut(idx)};
+ display:flex;
+ align-items:center;
+ justify-content:center;
+ font-size:10px;
+ font-weight:bold;
+ color:#000;">
+ ${idx + 1}
+ </div>`;
+ offset += pct;
+ });
+ if (bar.rem > 0) {
+ const dropPct = (bar.rem / bar.len) * 100;
+ barSegments += `
+ <div class="barSegment"
+ style="left:${offset}%;
+ width:${dropPct}%;
+ background:#cccccc">
+ </div>`;
+ }
+ w.document.write(`
+ <h2>CUT SHEET</h2>
+ <div class="block"><b>Material:</b> ${material}</div>
+ <div class="block"><b>Bar ${i + 1}:</b> ${(bar.len / 12).toFixed(1)}′</div>
+ <div class="block"><b>Drop:</b> ${bar.rem.toFixed(3)} in</div>
+ <div class="barOuter">
+ ${barSegments}
+ </div>
+ <div class="block">
+ <b>Cuts:</b>
+ <ul>
+ `);
+ bar.cuts.forEach((c, idx) => {
+ w.document.write(`<li><b>${idx + 1}.</b> ${c.part} – ${c.len.toFixed(3)} in</li>`);
+ });
+ w.document.write(`
+ </ul>
+ </div>
+ <hr>
+ `);
+ });
+ }
+ w.document.write(`
+ </body>
+ </html>
+ `);
+ w.document.close();
+ w.focus();
+ w.print();
 }
-#brandBox{
-  display:flex;
-  flex-direction:column;
-  align-items:flex-end;
-  gap:4px;
-}
-#brandLogo{
-  max-width:220px;
-  max-height:60px;
-  width:auto;
-  height:auto;
-  object-fit:contain;
-}
-#logoNote{
-  font-size:0.75em;
-  color:#7a0000;
-  display:none;
-}
-
-</style>
-    </head>
-    <body>
-      ${projectName ? `<div class="project"><b>Project:</b> ${projectName}</div>` : ""}
-      <div class="project"><b>Generated by:</b> ${APP_NAME} ${APP_VERSION} (Build ${APP_BUILD_DATE})</div>
-      <div class="project"><b>Disclaimer:</b> ${DISCLAIMER_TEXT}</div>
-  `);
-
-  for (const material in lastNestResults) {
-    lastNestResults[material].forEach((bar, i) => {
-      let offset = 0;
-      let barSegments = "";
-
-      bar.cuts.forEach((c, idx) => {
-        const pct = (c.len / bar.len) * 100;
-        barSegments += `
-          <div class="barSegment"
-               style="left:${offset}%;
-                      width:${pct}%;
-                      background:${colorForCut(idx)};
-                      display:flex;
-                      align-items:center;
-                      justify-content:center;
-                      font-size:10px;
-                      font-weight:bold;
-                      color:#000;">
-            ${idx + 1}
-          </div>`;
-        offset += pct;
-      });
-
-      if (bar.rem > 0) {
-        const dropPct = (bar.rem / bar.len) * 100;
-        barSegments += `
-          <div class="barSegment"
-               style="left:${offset}%;
-                      width:${dropPct}%;
-                      background:#cccccc">
-          </div>`;
-      }
-
-      w.document.write(`
-        <h2>CUT SHEET</h2>
-
-        <div class="block"><b>Material:</b> ${material}</div>
-        <div class="block"><b>Bar ${i + 1}:</b> ${(bar.len / 12).toFixed(1)}′</div>
-        <div class="block"><b>Drop:</b> ${bar.rem.toFixed(3)} in</div>
-
-        <div class="barOuter">
-          ${barSegments}
-        </div>
-
-        <div class="block">
-          <b>Cuts:</b>
-          <ul>
-      `);
-
-      bar.cuts.forEach((c, idx) => {
-        w.document.write(`<li><b>${idx + 1}.</b> ${c.part} – ${c.len.toFixed(3)} in</li>`);
-      });
-
-      w.document.write(`
-          </ul>
-        </div>
-
-        <hr>
-      `);
-    });
-  }
-
-  w.document.write(`
-    </body>
-    </html>
-  `);
-
-  w.document.close();
-  w.focus();
-  w.print();
-}
-
 /* =====================================================
-   EXPORT PURCHASING LIST (EXCEL)
-   ===================================================== */
+ EXPORT PURCHASING LIST (EXCEL)
+ ===================================================== */
 function exportPurchasingExcel() {
-  if (!Object.keys(lastNestResults).length) {
-    alert("Generate cut lists before exporting purchasing.");
-    return;
-  }
-
-  const rows = [] ;
+ if (!Object.keys(lastNestResults).length) {
+ alert("Generate cut lists before exporting purchasing.");
+ return;
+ }
+ const rows = [] ;
  rows.push([projectName || ""]);
  rows.push([`Generated by ${APP_NAME} ${APP_VERSION} on ${new Date().toLocaleString()}`]);
  rows.push([`Disclaimer: ${DISCLAIMER_TEXT}`]);
  rows.push([]);
-
-  rows.push([
-    "Material",
-    "Stock Length (ft)",
-    "Quantity",
-    "Total Length (ft)",
-    "Notes",
-    "Weight (lb/ft)",
-    "Total Weight (lb)",
-    "Total Weight (tons)"
-  ]);
-
-  for (const material in lastNestResults) {
-    const bars = lastNestResults[material];
-
-    const byLength = {};
-    bars.forEach(b => {
-      byLength[b.len] = (byLength[b.len] || 0) + 1;
-    });
-
-    for (const lenIn in byLength) {
-      const qty = byLength[lenIn];
-      const lenFt = Number(lenIn) / 12;
-
-      const wpf = weightLbPerFt(material);
-      const totalOrderFt = lenFt * qty;
-      const totalLb = wpf ? (wpf * totalOrderFt) : null;
-
-      rows.push([
-        material,
-        lenFt,
-        qty,
-        (lenFt * qty).toFixed(1),
-        (diagnostics[material]?.converted > 0 ? "Fallback stock used" : ""),
-        wpf ? wpf.toFixed(2) : "",
-        totalLb ? totalLb.toFixed(0) : "",
-        totalLb ? (totalLb / 2000).toFixed(2) : ""
-      ]);
-    }
-  }
-
-  const ws = XLSX.utils.aoa_to_sheet(rows);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Material Order");
-
-  ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 7 } }];
-
-  ws["!cols"] = [
-    { wch: 40 },
-    { wch: 18 },
-    { wch: 10 },
-    { wch: 18 },
-    { wch: 28 },
-    { wch: 14 },
-    { wch: 18 },
-    { wch: 16 }
-  ];
-
-  const fname = projectName
+ rows.push([
+ "Material",
+ "Stock Length (ft)",
+ "Quantity",
+ "Total Length (ft)",
+ "Notes",
+ "Weight (lb/ft)",
+ "Total Weight (lb)",
+ "Total Weight (tons)"
+ ]);
+ for (const material in lastNestResults) {
+ const bars = lastNestResults[material];
+ const byLength = {};
+ bars.forEach(b => {
+ byLength[b.len] = (byLength[b.len] || 0) + 1;
+ });
+ for (const lenIn in byLength) {
+ const qty = byLength[lenIn];
+ const lenFt = Number(lenIn) / 12;
+ const wpf = weightLbPerFt(material);
+ const totalOrderFt = lenFt * qty;
+ const totalLb = wpf ? (wpf * totalOrderFt) : null;
+ rows.push([
+ material,
+ lenFt,
+ qty,
+ (lenFt * qty).toFixed(1),
+ (diagnostics[material]?.converted > 0 ? "Fallback stock used" : ""),
+ wpf ? wpf.toFixed(2) : "",
+ totalLb ? totalLb.toFixed(0) : "",
+ totalLb ? (totalLb / 2000).toFixed(2) : ""
+ ]);
+ }
+ }
+ const ws = XLSX.utils.aoa_to_sheet(rows);
+ const wb = XLSX.utils.book_new();
+ XLSX.utils.book_append_sheet(wb, ws, "Material Order");
+ ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 7 } }];
+ ws["!cols"] = [
+ { wch: 40 },
+ { wch: 18 },
+ { wch: 10 },
+ { wch: 18 },
+ { wch: 28 },
+ { wch: 14 },
+ { wch: 18 },
+ { wch: 16 }
+ ];
+ const fname = projectName
  ? `Material_Purchase_${projectName}_${APP_VERSION}.xlsx`
  : `Material_Purchase_${APP_VERSION}.xlsx`;
-
-  XLSX.writeFile(wb, fname);
+ XLSX.writeFile(wb, fname);
 }
 </script>
 
-
-
 <div id="disclaimer" class="info" style="margin-top:18px; border-top:1px solid #ddd; padding-top:10px;">
-  <b>Disclaimer:</b> This tool automates takeoff and cut optimization. While automation can reduce effort, results may contain errors. <b>Always verify</b> all generated quantities, lengths, and weights against the project documents and shop standards before ordering or fabrication.
+ <b>Disclaimer:</b> This tool automates takeoff and cut optimization. While automation can reduce effort, results may contain errors. <b>Always verify</b> all generated quantities, lengths, and weights against the project documents and shop standards before ordering or fabrication.
 </div>
-
 </body>
 </html>
-``
