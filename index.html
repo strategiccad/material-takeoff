@@ -212,7 +212,7 @@ let aiscWpfLoadAttempted = false;
 // =========================
 const APP_NAME = "Material Takeoff & Nesting";
 const APP_VERSION = "v1.0.0";
-const APP_BUILD_DATE = "2026-04-22";
+const APP_BUILD_DATE = "2026-04-24";
 const DISCLAIMER_TEXT = "This tool automates takeoff and cut optimization. While automation can reduce effort, results may contain errors. Always verify all generated quantities, lengths, and weights against the project documents and shop standards before ordering or fabrication.";
 
 // Cache-bust AISC lookup while keeping the filename exactly: aisc_wpf_v16.json
@@ -1023,13 +1023,32 @@ const r = new FileReader();
     const wb = XLSX.read(r.result, { type: "array" });
     const ws = wb.Sheets[wb.SheetNames[0]];
     const g = XLSX.utils.sheet_to_json(ws, { header: 1 });
+    // --------------------------------------------------
+// Template validation: require SCC stamp + project name
+// --------------------------------------------------
+const stampD6 = (g[1] && g[5][3]) ? String(g[5][3]).trim() : "";
+const projC4  = (g[3] && g[3][2]) ? String(g[3][2]).trim() : "";
+
+const REQUIRED_STAMP = "SCC_BOM_TEMPLATE";
+
+if (!stampD6.includes(REQUIRED_STAMP)) {
+  setStatus("Unsupported BOM: missing SCC template stamp.", "error");
+  alert("Unsupported BOM.\n\nThis file does not appear to be an SCC-supplied template.\n\nPlease use the official SCC BOM template.");
+  return;
+}
+
+if (!projC4) {
+  setStatus("Unsupported BOM: missing Project Name in C4.", "error");
+  alert("Unsupported BOM.\n\nProject Name (cell C4) is blank.\n\nPlease use the official SCC BOM template and fill in the Project Name.");
+  return;
+}
 
     bomRows = [];
     lastNestResults = {};
     diagnostics = {};
 
     // Project name from Excel cell C4
-    projectName = (g[3] && g[3][2]) ? String(g[3][2]).trim() : "";
+    projectName = projC4;
 
     // Load AISC WPF lookup (non-blocking; falls back if unavailable)
     loadAiscWpf().then(() => { try { renderSummary(); } catch(e) {} });
