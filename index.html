@@ -153,9 +153,8 @@ th { background: #eee; }
 <div class="buttonRow">
   <div class="leftButtons">
     <button onclick="importBOM()">Import BOM</button>
-    <button onclick="toggleStock()">Configure Stock</button>
-    <button onclick="stockConfig.style.display='none'">Hide Stock Configuration</button>
-    <button onclick="generateCutLists()">Generate Cut Lists</button>
+    <button id="stockToggleBtn" onclick="toggleStockVisibility()">Configure Stock</button>
+<button onclick="generateCutLists()">Generate Cut Lists</button>
   </div>
 
   <div class="rightButtons">
@@ -225,7 +224,7 @@ const LOGO_MAP = {
   AMI: `./logo_AMI.png?v=${encodeURIComponent(APP_VERSION)}`,
   BCI: `./logo_BCI.png?v=${encodeURIComponent(APP_VERSION)}`,
   SYN: `./logo_SYN.png?v=${encodeURIComponent(APP_VERSION)}`,
-  2343: `./logo_2343.png?v=${encodeURIComponent(APP_VERSION)}`,
+  CTC: `./logo_CTC.png?v=${encodeURIComponent(APP_VERSION)}`,
   SCC: `./logo_SCC.png?v=${encodeURIComponent(APP_VERSION)}`
 };
 
@@ -321,6 +320,34 @@ function ensureStockInitialized() {
     toggleStock();
   }
 }
+
+// =========================
+// Stock panel toggle button
+// =========================
+function updateStockToggleBtn() {
+  const btn = document.getElementById('stockToggleBtn');
+  if (!btn) return;
+
+  // Before any stock has been built, keep original label
+  if (!stockInitialized) {
+    btn.textContent = 'Configure Stock';
+    return;
+  }
+
+  const visible = (stockConfig && stockConfig.style.display !== 'none');
+  btn.textContent = visible ? 'Hide Stock Configuration' : 'Show Stock Configuration';
+}
+
+function toggleStockVisibility() {
+  // If hidden (or never shown), show/build it
+  if (!stockInitialized || (stockConfig && stockConfig.style.display === 'none') || (stockConfig && stockConfig.style.display === '')) {
+    toggleStock();
+  } else {
+    stockConfig.style.display = 'none';
+  }
+  updateStockToggleBtn();
+}
+
 
 // -------------------------
 // AISC WPF lookup (Option A)
@@ -932,6 +959,7 @@ function weightLbPerFtFallback(desc) {
 
   const d = (desc || "").toUpperCase();
 
+  // HSS / TS geometric fallback
   let m = d.match(/\b(HSS|TS)\s*(\d+(?:\.\d+)?)\s*X\s*(\d+(?:\.\d+)?)\s*X\s*([0-9]+(?:\/[0-9]+)?|\d+(?:\.\d+)?)/);
   if (m) {
     const b = floatOrFrac(m[2]);
@@ -943,17 +971,29 @@ function weightLbPerFtFallback(desc) {
     }
   }
 
-  m = d.match(/\bL\s*(\d+(?:\.\d+)?|\d+)\s*X\s*(\d+(?:\.\d+)?|\d+)\s*X\s*([0-9]+(?:\/[0-9]+)?|\d+(?:\.\d+)?)/);
-  if (m) {
-    const a = floatOrFrac(m[1]);
-    const b = floatOrFrac(m[2]);
-    const t = floatOrFrac(m[3]);
-    if (a > 0 && b > 0 && t > 0) {
-      const area = t * (a + b - t);
-      return weightLbPerFtFromArea(area);
+  // L (angle) geometric fallback — robust to mixed numbers like "3 1/2"
+  // Examples: "L 3 1/2 x 3 x 1/2, ASTM A36" or "L3-1/2X3X1/2"
+  // Uses area ≈ t * (a + b - t)
+  try {
+    const base = String(desc || "").split(',')[0].toUpperCase().trim();
+    if (base.startsWith('L')) {
+      let s = base.replace(/^L\s*/,'');
+      s = s.replace(/\s+/g,' ');
+      s = s.replace(/\s*X\s*/g,'X');
+      const parts = s.split('X');
+      if (parts.length >= 3) {
+        const a = parseMixedNumberToken(parts[0].replace(/\s+/g,''));
+        const b = parseMixedNumberToken(parts[1].replace(/\s+/g,''));
+        const t = parseMixedNumberToken(parts[2].replace(/\s+/g,''));
+        if (a > 0 && b > 0 && t > 0) {
+          const area = t * (a + b - t);
+          return weightLbPerFtFromArea(area);
+        }
+      }
     }
-  }
+  } catch(e) {}
 
+  // FB geometric fallback
   m = d.match(/\bFB\s*(\d+(?:\.\d+)?)\s*X\s*([0-9]+(?:\/[0-9]+)?|\d+(?:\.\d+)?)/);
   if (m) {
     const w = floatOrFrac(m[1]);
@@ -962,7 +1002,6 @@ function weightLbPerFtFallback(desc) {
   }
 
   if (d.startsWith("PIPE")) return null;
-
   return null;
 }
 
@@ -1336,6 +1375,7 @@ function toggleStock() {
 
   stockConfig.style.display = "block";
   refreshStockSuggestions();
+  updateStockToggleBtn();
 }
 
 /* =====================================================
