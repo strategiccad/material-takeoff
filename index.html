@@ -298,6 +298,16 @@ function colorForCut(i) {
   return CUT_COLORS[i % CUT_COLORS.length];
 }
 
+
+function escapeHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function markDirty() {
   dirtyNotice.style.display = "block";
 }
@@ -491,6 +501,9 @@ function downsizeBarsToAllowedLengths(bars, allowedLensFt, kerfIn) {
 
   bars.forEach(b => {
     if (!b || !Array.isArray(b.cuts)) return;
+
+    // Do not alter rule-exempt bars (e.g., shop remnants like 10′)
+    if (b.ruleExempt) return;
 
     const cutsSum = b.cuts.reduce((s, c) => s + (c.len || 0), 0);
     const kerfTotal = (b.cuts.length > 1) ? (kerfIn || 0) * (b.cuts.length - 1) : 0;
@@ -773,12 +786,189 @@ function updateSuggestionRow(row) {
       const planText = cur.length
         ? cur.map(e => `${e.qty===Infinity?"∞":e.qty}×${e.lenFt.toFixed(0)}′`).join(" + ")
         : "(none)";
-      noteDiv.textContent = `Override: ${planText}. Target drop ≤ ${getDropLimitFt().toFixed(0)}′.`;
+      const sn = row.dataset.suggestedNote ? decodeURIComponent(row.dataset.suggestedNote) : '';
+ noteDiv.textContent = `Override: ${planText}. ${sn ? sn + ' ' : ''}Target drop ≤ ${getDropLimitFt().toFixed(0)}′.`;
     }
   }
 }
 
 
+
+
+// =====================================================
+// Inventory overrides + Auto-managed suggested columns (2–4)
+// =====================================================
+// The intent:
+//  - Users can enter finite inventory/remnants (even rule-breaking lengths) in any column.
+//  - The tool consumes inventory first, then suggests/order stock for the remaining cuts.
+//  - Columns 2–4 are auto-managed to display the optimizer's finite+∞ mix, without duplicating ∞ fallback.
+
+function isAutoCell(inputEl) {
+  return !!(inputEl && inputEl.dataset && inputEl.dataset.auto === '1');
+}
+
+function getInventoryFromRow(row) {
+  const inputs = Array.from(row.querySelectorAll('input'));
+  const inv = [];
+  for (let slot = 0; slot < 4; slot++) {
+    const qtyInput = inputs[slot*2];
+    const lenInput = inputs[slot*2+1];
+    const qtyRaw = String(qtyInput.value || '').trim();
+    const lenFt = Number(lenInput.value) || 0;
+    if (!lenFt || !qtyRaw) continue;
+
+    // Ignore auto-filled suggested cells as inventory
+    if (isAutoCell(qtyInput) || isAutoCell(lenInput)) continue;
+
+    const qty = (qtyRaw === '∞') ? Infinity : (Number(qtyRaw) || 0);
+    if (qty === Infinity || qty <= 0) continue; // inventory must be finite
+
+    inv.push({ qty: qty, lenIn: lenFt * 12 });
+  }
+  return inv;
+}
+
+function remainingCutsAfterInventory(cutsIn, inventory, kerfIn) {
+  const kerf = kerfIn || 0;
+  const cuts = (cutsIn || []).slice().map(Number).filter(x => x > 0).sort((a,b) => b-a);
+  if (!cuts.length || !inventory || !inventory.length) return cuts;
+
+  const bars = [];
+  inventory.forEach(e => {
+    for (let i = 0; i < e.qty; i++) {
+      bars.push({ len: e.lenIn, rem: e.lenIn, cutsCount: 0 });
+    }
+  });
+
+  const remaining = [];
+  for (const cLen of cuts) {
+    let bestBar = null;
+    let bestRemAfter = Infinity;
+    for (const b of bars) {
+      const need = cLen + (b.cutsCount > 0 ? kerf : 0);
+      if (b.rem >= need) {
+        const remAfter = b.rem - need;
+        if (remAfter < bestRemAfter) {
+          bestRemAfter = remAfter;
+          bestBar = b;
+        }
+      }
+    }
+    if (bestBar) {
+      const need = cLen + (bestBar.cutsCount > 0 ? kerf : 0);
+      bestBar.rem -= need;
+      bestBar.cutsCount += 1;
+    } else {
+      remaining.push(cLen);
+    }
+  }
+  return remaining;
+}
+
+function recomputeSuggestedForRow(row) {
+  if (!row) return;
+  const material = row.dataset.material;
+  if (!material) return;
+
+  const allCuts = cutMapGlobal[material] || [];
+  const kerfIn = parseFloat(document.getElementById('kerfInput')?.value) || 0;
+  const dropLimit = getDropLimitFt();
+
+  const inventory = getInventoryFromRow(row);
+  const remaining = remainingCutsAfterInventory(allCuts, inventory, kerfIn);
+
+  // If BOM has cuts but none remain after inventory, avoid "No cuts found" messaging.
+  if ((allCuts || []).length > 0 && remaining.length === 0) {
+    row.dataset.suggestedPlan = encodePlanForDataset([]);
+    row.dataset.suggestedNote = encodeURIComponent('All cuts satisfied by inventory overrides.');
+    return;
+  }
+
+  const plan = chooseStockPlan(material, remaining, kerfIn, dropLimit);
+  const suggestedPlan = normalizePlan(plan.entries);
+  row.dataset.suggestedPlan = encodePlanForDataset(suggestedPlan);
+  row.dataset.suggestedNote = encodeURIComponent(plan.note || 'Suggested.');
+}
+
+// Auto-fill columns 2–4 with the optimizer's suggested plan (finite + ∞).
+// Managed cells (auto-filled) are kept in sync with the latest suggestion; manual overrides are never overwritten.
+function ensureSuggestedColumns(row) {
+  if (!row) return;
+  const suggested = normalizePlan(decodePlanFromDataset(row.dataset.suggestedPlan));
+  const inputs = Array.from(row.querySelectorAll('input'));
+  if (inputs.length < 8) return;
+
+  // Detect whether slot 0 is currently showing an ∞ fallback.
+  const qty0 = String(inputs[0].value || '').trim();
+  const len0 = Number(inputs[1].value) || 0;
+  const slot0ShowsInfinity = (qty0 === '∞' && len0 > 0);
+
+  // Manual (non-auto) lengths already present should not be duplicated.
+  const manualLens = new Set();
+  for (let slot = 0; slot < 4; slot++) {
+    const qtyInput = inputs[slot*2];
+    const lenInput = inputs[slot*2+1];
+    const lenFt = Number(lenInput.value) || 0;
+    if (!lenFt) continue;
+    if (isAutoCell(qtyInput) || isAutoCell(lenInput)) continue;
+    manualLens.add(Number(lenFt));
+  }
+
+  // If slot 0 already displays the ∞ fallback, do NOT duplicate ∞ fallback in cols 2–4.
+  const base = slot0ShowsInfinity ? (suggested || []).filter(e => e.qty !== Infinity) : (suggested || []);
+  const usable = base.filter(e => !manualLens.has(Number(e.lenFt)));
+
+  let si = 0;
+  for (let slot = 1; slot < 4; slot++) {
+    const qtyInput = inputs[slot*2];
+    const lenInput = inputs[slot*2+1];
+
+    const qtyRaw = String(qtyInput.value || '').trim();
+    const lenFtNow = Number(lenInput.value) || 0;
+    const empty = (!qtyRaw && !lenFtNow);
+    const managed = isAutoCell(qtyInput) || isAutoCell(lenInput);
+
+    // Only fill empty slots OR overwrite managed (auto) slots.
+    if (!empty && !managed) continue;
+
+    if (si >= usable.length) {
+      qtyInput.value = '';
+      lenInput.value = '';
+      if (qtyInput && qtyInput.dataset) delete qtyInput.dataset.auto;
+      if (lenInput && lenInput.dataset) delete lenInput.dataset.auto;
+      continue;
+    }
+
+    const e = usable[si++];
+    qtyInput.value = (e.qty === Infinity) ? '∞' : String(e.qty);
+    lenInput.value = String(Number(e.lenFt));
+    qtyInput.dataset.auto = '1';
+    lenInput.dataset.auto = '1';
+  }
+}
+
+function handleStockInput(el) {
+  markDirty();
+  const row = el ? el.closest('tr') : null;
+  if (!row) return;
+
+  // Clear auto flag for BOTH inputs in this slot when user edits either qty or len.
+  try {
+    const inputs = Array.from(row.querySelectorAll('input'));
+    const idx = inputs.indexOf(el);
+    if (idx >= 0) {
+      const slot = Math.floor(idx / 2);
+      const qtyInput = inputs[slot*2];
+      const lenInput = inputs[slot*2+1];
+      if (qtyInput && qtyInput.dataset) delete qtyInput.dataset.auto;
+      if (lenInput && lenInput.dataset) delete lenInput.dataset.auto;
+    }
+  } catch (e) {}
+
+  recomputeSuggestedForRow(row);
+  ensureSuggestedColumns(row);
+  updateSuggestionRow(row);
+}
 
 function resetSuggested(row) {
   if (!row) return;
@@ -813,8 +1003,19 @@ function refreshStockSuggestions() {
     const material = row.dataset.material;
     const cuts = cutMapGlobal[material] || [];
 
-    const plan = chooseStockPlan(material, cuts, kerfIn, dropLimit);
-    const newSuggested = normalizePlan(plan.entries);
+    const inventory = getInventoryFromRow(row);
+ const remaining = remainingCutsAfterInventory(cuts, inventory, kerfIn);
+ let plan;
+ let newSuggested;
+ if ((cuts || []).length > 0 && remaining.length === 0) {
+  newSuggested = [];
+  row.dataset.suggestedNote = encodeURIComponent('All cuts satisfied by inventory overrides.');
+ } else {
+  plan = chooseStockPlan(material, remaining, kerfIn, dropLimit);
+  newSuggested = normalizePlan(plan.entries);
+  row.dataset.suggestedNote = encodeURIComponent(plan.note);
+ }
+    /* newSuggested is computed above (inventory-aware) */
 
     const inputs = Array.from(row.querySelectorAll("input"));
     const current = [];
@@ -1029,10 +1230,14 @@ function readStockConfig() {
       const lenFt = Number(inputs[i + 1].value);
       if (!lenFt) continue;
 
-      stockCache[mat].push({
-        qty: qtyRaw === "∞" ? Infinity : Number(qtyRaw) || 0,
-        len: lenFt * 12
-      });
+      // Determine if this entered length violates the allowed-length rules for this material
+    const allowed = allowedStockLengthsFt(mat, cutMapGlobal[mat] || [], getDropLimitFt());
+    const ruleExempt = Array.isArray(allowed) ? !allowed.includes(lenFt) : false;
+    stockCache[mat].push({
+      qty: qtyRaw === "∞" ? Infinity : (Number(qtyRaw) || 0),
+      len: lenFt * 12,
+      ruleExempt: ruleExempt
+    });
     }
   });
 }
@@ -1098,11 +1303,14 @@ if (!projC4) {
       const row = g[i];
       if (!row || !isStructural(row[3])) continue;
       bomRows.push({
-        qty: +row[0],
-        part: row[1],
-        desc: row[3],
-        len: +row[9]
-      });
+  qty: +row[0],
+  part: row[1],
+  desc: row[3],
+  cutdetail1: row[4],
+  ang: row[5],
+  cutdetail2: row[6],
+  len: +row[9]
+});
     }
 
     
@@ -1169,7 +1377,7 @@ function nestCuts(cuts, stock, kerf) {
       });
 
       if (best) {
-        bars.push({ len: best.len, rem: best.len - c.len, cuts: [c] });
+        bars.push({ len: best.len, rem: best.len - c.len, cuts: [c], ruleExempt: !!best.ruleExempt });
         if (best.qty !== Infinity) best.qty--;
         placed = true;
       }
@@ -1354,14 +1562,14 @@ function toggleStock() {
 
       stockCache[m].forEach((s, idx) => {
         html += `
-          <td><input value="${s.qty === Infinity ? "∞" : s.qty}" oninput="markDirty(); updateSuggestionRow(this.closest('tr'))"></td>`;
+          <td><input value="${s.qty === Infinity ? "∞" : s.qty}" oninput="handleStockInput(this)"${idx===0?"":" data-auto=\"1\""}></td>`;
 
         if (idx === 0) {
           html += `
-          <td><input value="${s.len}" oninput="markDirty(); updateSuggestionRow(this.closest('tr'))"></td>`;
+          <td><input value="${s.len}" oninput="handleStockInput(this)"${idx===0?"":" data-auto=\"1\""}></td>`;
         } else {
           html += `
-          <td><input value="${s.len}" oninput="markDirty(); updateSuggestionRow(this.closest('tr'))"></td>`;
+          <td><input value="${s.len}" oninput="handleStockInput(this)"${idx===0?"":" data-auto=\"1\""}></td>`;
         }
       });
 
@@ -1371,6 +1579,12 @@ function toggleStock() {
     html += "</table>";
     stockConfig.innerHTML = html;
     stockInitialized = true;
+ // Sync suggested columns (2–4) to the optimizer mix and refresh notes
+ stockConfig.querySelectorAll("tr[data-material]").forEach(r => {
+  recomputeSuggestedForRow(r);
+  ensureSuggestedColumns(r);
+  updateSuggestionRow(r);
+ });
   }
 
   stockConfig.style.display = "block";
@@ -1398,7 +1612,7 @@ function generateCutLists() {
   bomRows.forEach(r => {
     const k = r.desc;
     grouped[k] = grouped[k] || [];
-    for (let i = 0; i < r.qty; i++) grouped[k].push({ part: r.part, len: r.len });
+    for (let i = 0; i < r.qty; i++) grouped[k].push({ part: r.part, len: r.len, cutdetail1: r.cutdetail1, ang: r.ang, cutdetail2: r.cutdetail2 });
   });
 
   const materialsSorted = Object.keys(grouped).sort(compareMaterial);
@@ -1456,9 +1670,9 @@ reconcileStock(m, bars, stock);
         — Utilization ${util}%
  — Weight ${weightText}
         <div class="barOuter ${b.impossible ? "bar-bad" : "bar-ok"}">${segs}</div>
-        <ul>`;
-      b.cuts.forEach(c => (html += `<li>${c.part} – ${c.len.toFixed(3)} in</li>`));
-      html += `</ul>`;
+        <table style="width:100%; margin-top:6px;"><tr><th>Part</th><th>Len (in)</th><th>CUTDETAIL1</th><th style="text-align:center;">ANG</th><th>CUTDETAIL2</th></tr>`;
+      b.cuts.forEach(c => (html += `<tr><td>${escapeHtml(c.part)}</td><td>${Number(c.len).toFixed(3)}</td><td>${escapeHtml(c.cutdetail1)}</td><td style="text-align:center;">${escapeHtml(c.ang)}</td><td>${escapeHtml(c.cutdetail2)}</td></tr>`));
+      html += `</table>`;
       if (b.impossible) {
         html += `<div class="note">⚠ Cut exceeds max stock length</div>`;
       }
@@ -1590,7 +1804,7 @@ function exportCutSheets() {
     <body>
       ${projectName ? `<div class="project"><b>Project:</b> ${projectName}</div>` : ""}
       <div class="project"><b>Generated by:</b> ${APP_NAME} ${APP_VERSION} (Build ${APP_BUILD_DATE})</div>
-      <div class="project"><b>Disclaimer:</b> ${DISCLAIMER_TEXT}</div>
+      <div class="project"><b>Disclaimer:</b> ${DISCLAIMER_TEXT} Always verify cut angles to the drawing.</div>
   `);
 
   for (const material in lastNestResults) {
@@ -1647,15 +1861,16 @@ function exportCutSheets() {
 
         <div class="block">
           <b>Cuts:</b>
-          <ul>
+          <table style="width:100%; border-collapse:collapse;" border="1" cellspacing="0" cellpadding="4">
+ <tr><th>#</th><th>Part</th><th>Len (in)</th><th>CUTDETAIL1</th><th style="text-align:center;">ANG</th><th>CUTDETAIL2</th></tr>
       `);
 
       bar.cuts.forEach((c, idx) => {
-        w.document.write(`<li><b>${idx + 1}.</b> ${c.part} – ${c.len.toFixed(3)} in</li>`);
+        w.document.write(`<tr><td><b>${idx + 1}.</b></td><td>${escapeHtml(c.part)}</td><td>${Number(c.len).toFixed(3)}</td><td>${escapeHtml(c.cutdetail1)}</td><td style=\"text-align:center;\">${escapeHtml(c.ang)}</td><td>${escapeHtml(c.cutdetail2)}</td></tr>`);
       });
 
       w.document.write(`
-          </ul>
+          </table>
         </div>
 
         <hr>
