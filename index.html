@@ -210,8 +210,8 @@ let aiscWpfLoadAttempted = false;
 // Version + Disclaimer
 // =========================
 const APP_NAME = "Material Takeoff & Nesting";
-const APP_VERSION = "v1.0.0";
-const APP_BUILD_DATE = "2026-04-24";
+const APP_VERSION = "v1.0.4";
+const APP_BUILD_DATE = "2026-05-05";
 const DISCLAIMER_TEXT = "This tool automates takeoff and cut optimization. While automation can reduce effort, results may contain errors. Always verify all generated quantities, lengths, and weights against the project documents and shop standards before ordering or fabrication.";
 
 // Cache-bust AISC lookup while keeping the filename exactly: aisc_wpf_v16.json
@@ -438,11 +438,44 @@ function suggestedStockLenFtForMaterial(cutsInInches) {
 // =========================
 function stockCategory(desc) {
   const d = (desc || "").toUpperCase().trim();
+
+  // Angle
   if (d.startsWith("L ")) return "ANGLE";
+
+  // Channel / MC
   if (d.startsWith("MC ") || d.startsWith("C ")) return "CHANNEL";
-  if (d.startsWith("W ") || d.startsWith("WT ") || d.startsWith("HSS") || d.startsWith("TS ")) return "WF_HSS";
+
+  // Flat bar
+  if (d.startsWith("FB ")) return "FLAT_BAR";
+
+  // Round bar
+  if (d.startsWith("RB ")) return "ROUND_BAR";
+
+  // Pipe
+  if (d.startsWith("PIPE ")) return "PIPE";
+
+  // HSS / TS tubing: split square vs rectangular
+  if (d.startsWith("HSS") || d.startsWith("TS ")) {
+    // Normalize separators so parsing is consistent
+    let s = d.replace(/\s*X\s*/g, "X");
+    // Parse first two dims after HSS/TS (e.g., HSS 4X4X1/2 or TS 6X4X3/8)
+    const m = s.match(/^(HSS|TS)\s*([0-9]+(?:\.[0-9]+)?)X([0-9]+(?:\.[0-9]+)?)/);
+    if (m) {
+      const a = Number(m[2]);
+      const b = Number(m[3]);
+      if (!isNaN(a) && !isNaN(b) && Math.abs(a - b) < 1e-9) return "HSS_TS_SQUARE";
+      return "HSS_TS_RECT";
+    }
+    // If unparseable, treat as rectangular (safer list)
+    return "HSS_TS_RECT";
+  }
+
+  // W / WT
+  if (d.startsWith("W ") || d.startsWith("WT ")) return "WF";
+
   return "OTHER";
 }
+
 
 function roundUpToIncrement(ft, inc) {
   return Math.ceil(ft / inc) * inc;
@@ -450,47 +483,61 @@ function roundUpToIncrement(ft, inc) {
 
 function allowedStockLengthsFt(desc, cutsInInches, dropLimitFt) {
   const cat = stockCategory(desc);
-  const d = (desc || "").toUpperCase().trim();
   const maxCutFt = (cutsInInches && cutsInInches.length) ? (Math.max(...cutsInInches) / 12) : 0;
 
-  if (cat === "ANGLE") {
-    // Angle comes in 20' or 40' only
-    return [20, 40].filter(x => x >= maxCutFt);
+  // Helper: exclude lengths that can’t fit the longest cut
+  function filterByMaxCut(listFt) {
+    return (listFt || []).filter(ft => ft >= maxCutFt);
   }
 
-  if (cat === "WF_HSS") {
-    // W / WT / HSS / TS: 20'–60' in 5' increments.
-    // Special rule: for W shapes smaller than W8, cap at 40'.
-    let maxFt = 60;
-    const wm = d.match(/\bW\s*(\d+(?:\.\d+)?)/);
-    if (wm) {
-      const wDepth = Number(wm[1]);
-      if (!isNaN(wDepth) && wDepth < 8) maxFt = 40;
-    }
-
-    const lens = [];
-    for (let ft = 20; ft <= maxFt; ft += 5) {
-      if (ft >= maxCutFt) lens.push(ft);
-    }
-    return lens;
+  // --------------------
+  // Fixed stock-length rules (Shop Standard)
+  // --------------------
+  if (cat === "ANGLE") {
+    return filterByMaxCut([20, 40]);
   }
 
   if (cat === "CHANNEL") {
-    // Channels/MC = 10' increments (20'–80')
+    return filterByMaxCut([20, 40]);
+  }
+
+  if (cat === "ROUND_BAR") {
+    return filterByMaxCut([20]);
+  }
+
+  if (cat === "FLAT_BAR") {
+    return filterByMaxCut([20]);
+  }
+
+  if (cat === "HSS_TS_SQUARE") {
+    return filterByMaxCut([20, 24, 32, 40, 48, 56]);
+  }
+
+  if (cat === "HSS_TS_RECT") {
+    return filterByMaxCut([20, 24, 40]);
+  }
+
+  if (cat === "PIPE") {
+    return filterByMaxCut([21, 40]);
+  }
+
+  // W / WT: 20′–60′ in 5′ increments
+  if (cat === "WF") {
     const lens = [];
-    for (let ft = 20; ft <= 80; ft += 10) {
+    for (let ft = 20; ft <= 60; ft += 5) {
       if (ft >= maxCutFt) lens.push(ft);
     }
     return lens;
   }
 
-  // Default: 5' increments from 20' to 80'
-  const lens = [];
+  // Default fallback: 20′–80′ in 5′ increments
+  const fallback = [];
   for (let ft = 20; ft <= 80; ft += 5) {
-    if (ft >= maxCutFt) lens.push(ft);
+    if (ft >= maxCutFt) fallback.push(ft);
   }
-  return lens;
+  return fallback;
 }
+
 
 
 
