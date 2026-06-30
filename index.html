@@ -63,6 +63,54 @@ th { background: #eee; }
   top:0;
 }
 
+.wtParentCard{
+  border:1px solid #d6e4ff;
+  border-radius:6px;
+  padding:10px;
+  margin:10px 0 14px;
+  background:#fcfdff;
+}
+.wtParentMeta{
+  margin:2px 0 8px;
+  font-size:0.9em;
+  color:#333;
+}
+.wtSplitOuter{
+  position:relative;
+  height:38px;
+  background:#eee;
+  border:2px solid #999;
+  margin:6px 0 10px;
+}
+.wtSplitLane{
+  position:relative;
+  height:50%;
+  width:100%;
+  overflow:hidden;
+}
+.wtSplitLaneTop{
+  border-bottom:1px solid #999;
+}
+.wtSplitSeg{
+  position:absolute;
+  height:100%;
+  top:0;
+}
+.wtSplitEmpty{
+  background:repeating-linear-gradient(
+    45deg,
+    #f2f2f2,
+    #f2f2f2 8px,
+    #e0e0e0 8px,
+    #e0e0e0 16px
+  );
+}
+.wtLaneLabel{
+  font-size:0.9em;
+  font-weight:bold;
+  margin:8px 0 4px;
+}
+
 .bar-ok  { border-color:#999; }
 .bar-bad { border-color:#b00020; }
 
@@ -210,8 +258,8 @@ let aiscWpfLoadAttempted = false;
 // Version + Disclaimer
 // =========================
 const APP_NAME = "Material Takeoff & Nesting";
-const APP_VERSION = "v1.0.4";
-const APP_BUILD_DATE = "2026-05-05";
+const APP_VERSION = "v1.0.5";
+const APP_BUILD_DATE = "2026-06-30";
 const DISCLAIMER_TEXT = "This tool automates takeoff and cut optimization. While automation can reduce effort, results may contain errors. Always verify all generated quantities, lengths, and weights against the project documents and shop standards before ordering or fabrication.";
 
 // Cache-bust AISC lookup while keeping the filename exactly: aisc_wpf_v16.json
@@ -582,18 +630,33 @@ function chooseStockPlan(desc, cutsInInches, kerfIn, dropLimitFt) {
 
   function evalSet(lengthSet) {
     const stock = lengthSet.map(ft => ({ qty: Infinity, len: ft * 12 }));
-    const bars = nestCuts(JSON.parse(JSON.stringify(cuts)), JSON.parse(JSON.stringify(stock)), kerfIn || 0);
+    const useWtParentNesting = isWT(desc);
+    const bars = useWtParentNesting
+      ? nestWtParentBars(JSON.parse(JSON.stringify(cuts)), JSON.parse(JSON.stringify(stock)), kerfIn || 0)
+      : nestCuts(JSON.parse(JSON.stringify(cuts)), JSON.parse(JSON.stringify(stock)), kerfIn || 0);
 
-    // Post-process: downsize each bar to the shortest allowed length that still fits its assigned cuts
-    downsizeBarsToAllowedLengths(bars, lengthSet, kerfIn || 0);
+    if (useWtParentNesting) {
+      downsizeWtParentBarsToAllowedLengths(bars, lengthSet, kerfIn || 0);
+    } else {
+      // Post-process: downsize each bar to the shortest allowed length that still fits its assigned cuts
+      downsizeBarsToAllowedLengths(bars, lengthSet, kerfIn || 0);
+    }
 
     let bad = 0;
     let purchasedIn = 0;
     let totalDropIn = 0;
     bars.forEach(b => {
       purchasedIn += b.len;
-      totalDropIn += b.rem;
-      if (b.rem > dropLimitIn + 1e-6) bad++;
+      if (useWtParentNesting) {
+        const topDrop = laneDropIn(b.top, b.len);
+        const bottomDrop = laneDropIn(b.bottom, b.len);
+        const governingDrop = Math.max(topDrop, bottomDrop);
+        totalDropIn += topDrop + bottomDrop;
+        if (governingDrop > dropLimitIn + 1e-6) bad++;
+      } else {
+        totalDropIn += b.rem;
+        if (b.rem > dropLimitIn + 1e-6) bad++;
+      }
     });
 
     // Objective: minimize drop limit violations first.
@@ -772,6 +835,266 @@ function buildUiPlan(entriesRaw, fallbackLenFt, dropLimitFt) {
   const entries = [{ qty: Infinity, lenFt: fallbackLenFt }, ...finiteTop];
 
   return { entries, note };
+}
+
+function isWT(desc) {
+  return String(desc || '').toUpperCase().trim().startsWith('WT ');
+}
+
+function fmtShapeNumber(v) {
+  const n = Number(v);
+  if (!isFinite(n)) return '';
+  if (Math.abs(n - Math.round(n)) < 1e-9) return String(Math.round(n));
+  return n.toFixed(1).replace(/\.0$/, '');
+}
+
+// Display-first heuristic:
+// WT 8x28.5 -> W 16x57
+// If you later want exact AISC parent mapping, swap this out for a JSON lookup.
+function suggestedParentWForWT(desc) {
+  if (!isWT(desc)) return null;
+  const d = String(desc || '').toUpperCase().split(',')[0].trim();
+  const m = d.match(/^WT\s*(\d+(?:\.\d+)?)\s*X\s*(\d+(?:\.\d+)?)/);
+  if (!m) return null;
+
+  const depth = Number(m[1]);
+  const wt = Number(m[2]);
+  if (!isFinite(depth) || !isFinite(wt)) return null;
+
+  return `W ${fmtShapeNumber(depth * 2)}x${fmtShapeNumber(wt * 2)}`;
+}
+
+function purchasingMaterialLabel(desc) {
+  if (!isWT(desc)) return desc;
+  const parent = suggestedParentWForWT(desc);
+  return parent ? `${parent} (for ${desc})` : `${desc} (split from W parent)`;
+}
+
+// For WT, purchased stock weight should reflect the parent W, not a single tee.
+function purchasedWeightLbPerFt(desc) {
+  if (!isWT(desc)) return weightLbPerFt(desc);
+
+  const parent = suggestedParentWForWT(desc);
+  if (parent) {
+    const pw = weightLbPerFt(parent);
+    if (pw) return pw;
+  }
+
+  const wt = weightLbPerFt(desc);
+  return wt ? wt * 2 : null;
+}
+
+function wtLaneNeedIn(lane, cutLen, kerf) {
+  return cutLen + ((lane && lane.cuts && lane.cuts.length) ? (kerf || 0) : 0);
+}
+function wtLaneUsedIn(lane, kerf) {
+  if (!lane || !(lane.cuts || []).length) return 0;
+  const cutsSum = (lane.cuts || []).reduce((s, c) => s + (c.len || 0), 0);
+  const kerfTotal = ((lane.cuts || []).length > 1)
+    ? ((kerf || 0) * ((lane.cuts || []).length - 1))
+    : 0;
+  return cutsSum + kerfTotal;
+}
+function createWtLane(parentRef, name) {
+  return {
+    name,
+    parent: parentRef,
+    cuts: [],
+    rem: parentRef.len
+  };
+}
+function createWtParentBar(lenIn, opts) {
+  const parent = {
+    len: lenIn,
+    impossible: !!(opts && opts.impossible),
+    ruleExempt: !!(opts && opts.ruleExempt),
+    top: null,
+    bottom: null,
+    lanes: []
+  };
+  parent.top = createWtLane(parent, 'top');
+  parent.bottom = createWtLane(parent, 'bottom');
+  parent.lanes = [parent.top, parent.bottom];
+  return parent;
+}
+function placeCutOnWtLane(lane, cut, kerf) {
+  const need = wtLaneNeedIn(lane, cut.len, kerf);
+  lane.rem -= need;
+  lane.cuts.push(cut);
+}
+function openWtParentFromStock(stock, cutLen) {
+  const limited = (stock || []).filter(s => s.qty > 0 && s.qty !== Infinity);
+  const fallback = (stock || []).filter(s => s.qty === Infinity);
+  let best = null;
+  [limited, fallback].forEach(pool => {
+    if (best) return;
+    pool.forEach(s => {
+      if (s.len >= cutLen && (!best || s.len < best.len)) best = s;
+    });
+  });
+  if (!best) return null;
+  if (best.qty !== Infinity) best.qty--;
+  return createWtParentBar(best.len, { ruleExempt: !!best.ruleExempt });
+}
+function downsizeWtParentBarsToAllowedLengths(parentBars, allowedLensFt, kerfIn) {
+  if (!Array.isArray(parentBars) || !parentBars.length) return parentBars;
+  const allowedIn = (allowedLensFt || []).map(ft => ft * 12).sort((a, b) => a - b);
+  if (!allowedIn.length) return parentBars;
+  parentBars.forEach(pb => {
+    if (!pb || pb.ruleExempt) return;
+    const needTop = wtLaneUsedIn(pb.top, kerfIn || 0);
+    const needBottom = wtLaneUsedIn(pb.bottom, kerfIn || 0);
+    const need = Math.max(needTop, needBottom);
+    const newLen = allowedIn.find(L => L >= need);
+    if (!newLen) return;
+    pb.len = newLen;
+    pb.top.rem = Math.max(newLen - needTop, 0);
+    pb.bottom.rem = Math.max(newLen - needBottom, 0);
+  });
+  return parentBars;
+}
+function nestWtParentBars(cuts, stock, kerf) {
+  const sortedCuts = (cuts || []).slice().sort((a, b) => {
+    return (b.len - a.len) || String(a.part || '').localeCompare(String(b.part || ''));
+  });
+  const parentBars = [];
+  const maxLen = (stock && stock.length) ? Math.max(...stock.map(s => s.len)) : 0;
+  sortedCuts.forEach(cut => {
+    let bestLane = null;
+    let bestRemAfter = Infinity;
+    parentBars.forEach(parent => {
+      (parent.lanes || []).forEach(lane => {
+        const need = wtLaneNeedIn(lane, cut.len, kerf);
+        if (lane.rem >= need) {
+          const remAfter = lane.rem - need;
+          if (
+            remAfter < bestRemAfter ||
+            (
+              Math.abs(remAfter - bestRemAfter) < 1e-9 &&
+              lane.cuts.length < (bestLane ? bestLane.cuts.length : Infinity)
+            )
+          ) {
+            bestRemAfter = remAfter;
+            bestLane = lane;
+          }
+        }
+      });
+    });
+    if (bestLane) {
+      placeCutOnWtLane(bestLane, cut, kerf);
+      return;
+    }
+    const parent = openWtParentFromStock(stock, cut.len);
+    if (parent) {
+      placeCutOnWtLane(parent.top, cut, kerf);
+      parentBars.push(parent);
+      return;
+    }
+    const impossibleParent = createWtParentBar(maxLen, { impossible: cut.len > maxLen });
+    placeCutOnWtLane(impossibleParent.top, cut, kerf);
+    parentBars.push(impossibleParent);
+  });
+  return parentBars;
+}
+
+function laneSegmentsHtml(bar, parentLen, showCutNumbers = false) {
+  if (!bar || !parentLen) {
+    return `<div class="wtSplitSeg wtSplitEmpty" style="left:0%;width:100%"></div>`;
+  }
+
+  let off = 0;
+  let segs = '';
+
+  (bar.cuts || []).forEach((c, idx) => {
+    const pct = ((c.len || 0) / parentLen) * 100;
+    const cutNo = idx + 1;
+    const labelStyle = showCutNumbers
+      ? 'display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;color:#000;overflow:hidden;white-space:nowrap;'
+      : '';
+    const label = showCutNumbers ? String(cutNo) : '';
+    const title = showCutNumbers
+      ? ` title="Cut ${cutNo}: ${escapeHtml(c.part)} — ${Number(c.len).toFixed(3)} in"`
+      : '';
+    segs += `<div class="wtSplitSeg"${title} style="left:${off}%;width:${pct}%;background:${colorForCut(idx)};${labelStyle}">${label}</div>`;
+    off += pct;
+  });
+
+  const used = (bar.cuts || []).reduce((s, c) => s + (c.len || 0), 0);
+  const dropIn = Math.max(parentLen - used, 0);
+  const dropPct = (dropIn / parentLen) * 100;
+  segs += `<div class="wtSplitSeg" style="left:${off}%;width:${dropPct}%;background:${DROP_COLOR}"></div>`;
+
+  return segs;
+}
+
+function laneUtilPct(bar, parentLen) {
+  if (!bar || !parentLen) return '0.0';
+  const used = (bar.cuts || []).reduce((s, c) => s + (c.len || 0), 0);
+  return ((used / parentLen) * 100).toFixed(1);
+}
+
+function laneDropIn(bar, parentLen) {
+  if (!bar || !parentLen) return parentLen || 0;
+  const used = (bar.cuts || []).reduce((s, c) => s + (c.len || 0), 0);
+  return Math.max(parentLen - used, 0);
+}
+
+function laneWeightText(material, bar, parentLen, usePurchasedWeight) {
+  if (!parentLen) return '—';
+
+  const wpf = usePurchasedWeight ? purchasedWeightLbPerFt(material) : weightLbPerFt(material);
+  if (!wpf) return '—';
+
+  const stockFt = parentLen / 12;
+  const cutFt = bar ? ((bar.cuts || []).reduce((s, c) => s + (c.len || 0), 0) / 12) : 0;
+
+  const stockLb = wpf * stockFt;
+  const cutLb = wpf * cutFt;
+  const dropLb = stockLb - cutLb;
+
+  return `${stockLb.toFixed(1)} lb (cut ${cutLb.toFixed(1)} lb, drop ${dropLb.toFixed(1)} lb)`;
+}
+
+function renderLaneDetails(title, material, bar, parentLen, usePurchasedWeight) {
+  const util = laneUtilPct(bar, parentLen);
+  const dropIn = laneDropIn(bar, parentLen);
+  const weightText = laneWeightText(material, bar, parentLen, usePurchasedWeight);
+
+  let html = `<div class="wtLaneLabel">${title} — Utilization ${util}% — Drop ${dropIn.toFixed(3)} in — Weight ${weightText}</div>`;
+  html += `<table style="width:100%; margin-top:6px;"><tr><th>Part</th><th>Len (in)</th><th>CUTDETAIL1</th><th style="text-align:center;">ANG</th><th>CUTDETAIL2</th></tr>`;
+
+  if (!bar || !(bar.cuts || []).length) {
+    html += `<tr><td colspan="5"><i>Unused WT half</i></td></tr>`;
+  } else {
+    (bar.cuts || []).forEach(c => {
+      html += `<tr><td>${escapeHtml(c.part)}</td><td>${Number(c.len).toFixed(3)}</td><td>${escapeHtml(c.cutdetail1)}</td><td style="text-align:center;">${escapeHtml(c.ang)}</td><td>${escapeHtml(c.cutdetail2)}</td></tr>`;
+    });
+  }
+
+  html += `</table>`;
+  return html;
+}
+
+function renderWtParentCard(material, parentBar, idx, usePurchasedWeight) {
+  const parent = suggestedParentWForWT(material) || 'W parent';
+  const parentLen = parentBar.len || 0;
+  const topDropIn = laneDropIn(parentBar.top, parentLen);
+  const bottomDropIn = laneDropIn(parentBar.bottom, parentLen);
+  const sharedDropIn = Math.max(topDropIn, bottomDropIn);
+  const bottomUnused = !(parentBar.bottom && (parentBar.bottom.cuts || []).length);
+
+  let html = `<div class="wtParentCard">`;
+  html += `<div><b>Parent Bar ${idx + 1}</b> — ${parent} @ ${(parentLen / 12).toFixed(1)}′</div>`;
+  html += `<div class="wtParentMeta">True parent-bar nesting view. Top and bottom lanes represent the two WT halves cut from one parent W shape. Governing lane drop: ${sharedDropIn.toFixed(3)} in.${bottomUnused ? ' <span class="note">⚠ Bottom WT half unused on this parent bar.</span>' : ''}</div>`;
+  html += `<div class="wtSplitOuter">`;
+  html += `<div class="wtSplitLane wtSplitLaneTop">${laneSegmentsHtml(parentBar.top, parentLen)}</div>`;
+  html += `<div class="wtSplitLane">${laneSegmentsHtml(parentBar.bottom, parentLen)}</div>`;
+  html += `</div>`;
+  html += renderLaneDetails(`Top Tee Lane (${material})`, material, parentBar.top, parentLen, usePurchasedWeight);
+  html += renderLaneDetails(`Bottom Tee Lane (${material})`, material, parentBar.bottom, parentLen, usePurchasedWeight);
+  html += `</div>`;
+
+  return html;
 }
 
 function suggestionNoteForMaterial(cutsInInches, chosenStockFt, suggestedFt, overridden) {
@@ -1482,7 +1805,6 @@ function renderSummary() {
     for (let i = 0; i < r.qty; i++) grouped[k].push(r.len);
   });
 
-  // Total weight based on purchased stock length (bars used)
   let totalLb = 0;
   let unknownWeightCount = 0;
 
@@ -1500,12 +1822,26 @@ function renderSummary() {
       </tr>`;
 
   const materialsSorted = Object.keys(grouped).sort(compareMaterial);
+
   for (const m of materialsSorted) {
     const reqIn = grouped[m].reduce((s, l) => s + l, 0);
     const reqFt = reqIn / 12;
 
-    let bars = "—", stockFt = "—", status = "—", rowClass = "";
+    let bars = "—";
+    let stockFt = "—";
+    let status = "—";
+    let rowClass = "";
     let purchasedFt = 0;
+    let materialLabel = escapeHtml(m);
+
+    if (isWT(m)) {
+      const parent = suggestedParentWForWT(m);
+      if (parent) {
+        materialLabel += `<div class="note">Nested from suggested ${escapeHtml(parent)}.</div>`;
+      } else {
+        materialLabel += `<div class="note">Nested as parent W stock.</div>`;
+      }
+    }
 
     if (lastNestResults[m]) {
       const arr = lastNestResults[m];
@@ -1515,7 +1851,7 @@ function renderSummary() {
       if (tooLong) {
         status = "❌ Cut too long";
         rowClass = "row-bad";
-      } else if (diagnostics[m]?.converted > 0) {
+      } else if (diagnostics[m] && diagnostics[m].converted > 0) {
         status = "⚠️ Fallback used";
         rowClass = "row-warn";
       } else {
@@ -1523,18 +1859,35 @@ function renderSummary() {
         rowClass = "row-ok";
       }
 
-      const mix = {};
-      arr.forEach(b => (mix[b.len] = (mix[b.len] || 0) + 1));
-      bars = Object.keys(mix)
-        .sort((a, b) => b - a)
-        .map(l => `${mix[l]} × ${(l / 12).toFixed(0)}′`)
-        .join(", ");
+      if (isWT(m)) {
+        const parentBars = arr;
+        const mix = {};
+        parentBars.forEach(pb => {
+          mix[pb.len] = (mix[pb.len] || 0) + 1;
+        });
 
-      purchasedFt = arr.reduce((s, b) => s + b.len, 0) / 12;
-      stockFt = purchasedFt.toFixed(1);
+        bars = Object.keys(mix)
+          .sort((a, b) => b - a)
+          .map(l => `${mix[l]} × ${(l / 12).toFixed(0)}′ parent`)
+          .join(", ");
+
+        purchasedFt = parentBars.reduce((s, b) => s + b.len, 0) / 12;
+        stockFt = purchasedFt.toFixed(1);
+      } else {
+        const mix = {};
+        arr.forEach(b => (mix[b.len] = (mix[b.len] || 0) + 1));
+
+        bars = Object.keys(mix)
+          .sort((a, b) => b - a)
+          .map(l => `${mix[l]} × ${(l / 12).toFixed(0)}′`)
+          .join(", ");
+
+        purchasedFt = arr.reduce((s, b) => s + b.len, 0) / 12;
+        stockFt = purchasedFt.toFixed(1);
+      }
     }
 
-    const wpf = weightLbPerFt(m);
+    const wpf = purchasedWeightLbPerFt(m);
     let wLb = "—";
     let wTon = "—";
 
@@ -1548,7 +1901,7 @@ function renderSummary() {
     }
 
     html += `<tr class="${rowClass}">
-      <td>${m}</td>
+      <td>${materialLabel}</td>
       <td>${reqFt.toFixed(1)}</td>
       <td>${bars}</td>
       <td>${stockFt}</td>
@@ -1659,19 +2012,34 @@ function generateCutLists() {
   bomRows.forEach(r => {
     const k = r.desc;
     grouped[k] = grouped[k] || [];
-    for (let i = 0; i < r.qty; i++) grouped[k].push({ part: r.part, len: r.len, cutdetail1: r.cutdetail1, ang: r.ang, cutdetail2: r.cutdetail2 });
+    for (let i = 0; i < r.qty; i++) {
+      grouped[k].push({
+        part: r.part,
+        len: r.len,
+        cutdetail1: r.cutdetail1,
+        ang: r.ang,
+        cutdetail2: r.cutdetail2
+      });
+    }
   });
 
   const materialsSorted = Object.keys(grouped).sort(compareMaterial);
+
   for (const m of materialsSorted) {
     const stock = JSON.parse(JSON.stringify(stockCache[m]));
-    const bars = nestCuts(grouped[m], stock, kerf);
+    const allowed = allowedStockLengthsFt(m, cutMapGlobal[m], getDropLimitFt());
+    let bars;
 
-// ✅ NEW: downsize bars to shortest allowed length that still fits
-const allowed = allowedStockLengthsFt(m, cutMapGlobal[m], getDropLimitFt());
-downsizeBarsToAllowedLengths(bars, allowed, kerf);
+    if (isWT(m)) {
+      bars = nestWtParentBars(grouped[m], stock, kerf);
+      downsizeWtParentBarsToAllowedLengths(bars, allowed, kerf);
+      diagnostics[m] = diagnostics[m] || { converted: 0 };
+    } else {
+      bars = nestCuts(grouped[m], stock, kerf);
+      downsizeBarsToAllowedLengths(bars, allowed, kerf);
+      reconcileStock(m, bars, stock);
+    }
 
-reconcileStock(m, bars, stock);
     lastNestResults[m] = bars;
 
     if (diagnostics[m].converted > 0) {
@@ -1680,33 +2048,62 @@ reconcileStock(m, bars, stock);
       </div>`;
     }
 
+    if (isWT(m)) {
+      const parent = suggestedParentWForWT(m);
+      const parentBars = bars;
+
+      html += `<div class="materialBlock">
+        <div class="materialHeader">
+          ${m}
+          <span class="sub">— ${parentBars.length} true parent bar(s)${parent ? ` from suggested ${parent}` : ' shown as parent W bars'}</span>
+        </div>
+        <div class="materialBody">`;
+
+      html += `<div class="info">
+        <b>WT true parent-bar nesting:</b> each rendered bar is a purchased parent W member with independently nested top and bottom tee lanes.
+        ${parent ? `Suggested parent shape: <b>${parent}</b>.` : ''}
+      </div>`;
+
+      parentBars.forEach((parentBar, i) => {
+        html += renderWtParentCard(m, parentBar, i, true);
+      });
+
+      html += `</div></div>`;
+      continue;
+    }
+
     const mix = {};
     bars.forEach(b => (mix[b.len] = (mix[b.len] || 0) + 1));
+
     const mixText = Object.keys(mix)
       .sort((a, b) => b - a)
       .map(l => `${mix[l]} × ${(l / 12).toFixed(0)}′`)
       .join(", ");
 
-    html += `<div class="materialBlock"><div class="materialHeader">${m}<span class="sub">— ${mixText} (${bars.length} bars)</span></div><div class="materialBody">`;
+    html += `<div class="materialBlock">
+      <div class="materialHeader">${m}<span class="sub">— ${mixText} (${bars.length} bars)</span></div>
+      <div class="materialBody">`;
 
     bars.forEach((b, i) => {
       const used = b.cuts.reduce((s, c) => s + c.len, 0);
       const util = ((used / b.len) * 100).toFixed(1);
 
- const barWpf = weightLbPerFt(m);
- const barFt = b.len / 12;
- const cutFt = b.cuts.reduce((s, c) => s + c.len, 0) / 12;
- const barLb = barWpf ? (barWpf * barFt) : null;
- const cutLb = barWpf ? (barWpf * cutFt) : null;
- const dropLb = (barLb != null && cutLb != null) ? (barLb - cutLb) : null;
- const weightText = (barLb != null) ? (barLb.toFixed(1) + " lb (cut " + cutLb.toFixed(1) + " lb, drop " + dropLb.toFixed(1) + " lb)") : "—";
+      const barWpf = purchasedWeightLbPerFt(m);
+      const barFt = b.len / 12;
+      const cutFt = b.cuts.reduce((s, c) => s + c.len, 0) / 12;
+      const barLb = barWpf ? (barWpf * barFt) : null;
+      const cutLb = barWpf ? (barWpf * cutFt) : null;
+      const dropLb = (barLb != null && cutLb != null) ? (barLb - cutLb) : null;
+      const weightText = (barLb != null)
+        ? (barLb.toFixed(1) + " lb (cut " + cutLb.toFixed(1) + " lb, drop " + dropLb.toFixed(1) + " lb)")
+        : "—";
 
       let off = 0;
       let segs = "";
       b.cuts.forEach((c, idx) => {
-        const p = (c.len / b.len) * 100;
-        segs += `<div class="barSegment" style="left:${off}%;width:${p}%;background:${colorForCut(idx)}"></div>`;
-        off += p;
+        const pct = (c.len / b.len) * 100;
+        segs += `<div class="barSegment" style="left:${off}%;width:${pct}%;background:${colorForCut(idx)}"></div>`;
+        off += pct;
       });
       segs += `<div class="barSegment" style="left:${off}%;width:${(b.rem / b.len) * 100}%;background:${DROP_COLOR}"></div>`;
 
@@ -1715,18 +2112,36 @@ reconcileStock(m, bars, stock);
         <b>Bar ${i + 1}</b> (${(b.len / 12).toFixed(1)}′)
         — Drop ${b.rem.toFixed(3)} in
         — Utilization ${util}%
- — Weight ${weightText}
+        — Weight ${weightText}
         <div class="barOuter ${b.impossible ? "bar-bad" : "bar-ok"}">${segs}</div>
-        <table style="width:100%; margin-top:6px;"><tr><th>Part</th><th>Len (in)</th><th>CUTDETAIL1</th><th style="text-align:center;">ANG</th><th>CUTDETAIL2</th></tr>`;
-      b.cuts.forEach(c => (html += `<tr><td>${escapeHtml(c.part)}</td><td>${Number(c.len).toFixed(3)}</td><td>${escapeHtml(c.cutdetail1)}</td><td style="text-align:center;">${escapeHtml(c.ang)}</td><td>${escapeHtml(c.cutdetail2)}</td></tr>`));
+        <table style="width:100%; margin-top:6px;">
+          <tr>
+            <th>Part</th>
+            <th>Len (in)</th>
+            <th>CUTDETAIL1</th>
+            <th style="text-align:center;">ANG</th>
+            <th>CUTDETAIL2</th>
+          </tr>`;
+
+      b.cuts.forEach(c => {
+        html += `<tr>
+          <td>${escapeHtml(c.part)}</td>
+          <td>${Number(c.len).toFixed(3)}</td>
+          <td>${escapeHtml(c.cutdetail1)}</td>
+          <td style="text-align:center;">${escapeHtml(c.ang)}</td>
+          <td>${escapeHtml(c.cutdetail2)}</td>
+        </tr>`;
+      });
+
       html += `</table>`;
+
       if (b.impossible) {
         html += `<div class="note">⚠ Cut exceeds max stock length</div>`;
       }
+
       html += `</div>`;
     });
 
-    // Close material wrapper
     html += `</div></div>`;
   }
 
@@ -1734,7 +2149,6 @@ reconcileStock(m, bars, stock);
   cutLists.style.display = "block";
   renderSummary();
   clearDirty();
-
   document.getElementById("exportCutsBtn").disabled = false;
   document.getElementById("exportPurchBtn").disabled = false;
 }
@@ -1761,7 +2175,6 @@ function exportCutSheets() {
         .block { margin-bottom: 10px; }
         ul { margin-top: 6px; }
         hr { page-break-after: always; border: none; }
-
         .barOuter {
           position: relative;
           height: 18px;
@@ -1778,75 +2191,43 @@ function exportCutSheets() {
           -webkit-print-color-adjust: exact;
           print-color-adjust: exact;
         }
-      
-.rightButtons{
-  display:flex;
-  align-items:flex-start;
-  gap:12px;
-}
-#brandBox{
-  display:flex;
-  flex-direction:column;
-  align-items:flex-end;
-  gap:4px;
-}
-#brandLogo{
-  max-width:220px;
-  max-height:60px;
-  width:auto;
-  height:auto;
-  object-fit:contain;
-}
-#logoNote{
-  font-size:0.75em;
-  color:#7a0000;
-  display:none;
-}
-
-
-
-/* Status line */
-#statusLine{
-  margin: 6px 0 10px;
-  padding: 8px 10px;
-  border: 1px solid #ddd;
-  border-left-width: 4px;
-  border-radius: 4px;
-  font-size: 0.9em;
-}
-.status{ background:#f7f7f7; color:#333; border-left-color:#999; }
-.status-info{ background:#f3f8ff; border-left-color:#4a90e2; }
-.status-ok{ background:#f0fbf0; border-left-color:#2e7d32; }
-.status-warn{ background:#fff6e5; border-left-color:#f5a623; }
-.status-error{ background:#fdecea; border-left-color:#b00020; }
-
-
-
-/* Cut list material highlighting */
-.materialBlock{
-  border:1px solid #ddd;
-  border-radius:6px;
-  margin:14px 0;
-  overflow:hidden;
-}
-.materialHeader{
-  background:#f3f8ff;
-  border-left:6px solid #4a90e2;
-  padding:8px 10px;
-  font-weight:bold;
-}
-.materialHeader .sub{
-  font-weight:normal;
-  color:#333;
-  margin-left:8px;
-}
-.materialBody{
-  padding:0; /* no indent */
-}
-.materialBody > div{ padding:0 10px; }
-.materialBody ul{ margin:6px 0 0 0; padding:0; list-style-position: inside; }
-
-</style>
+        .wtSplitOuter {
+          position: relative;
+          height: 38px;
+          border: 2px solid #000;
+          background: #f2f2f2;
+          margin: 10px 0 14px;
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+        }
+        .wtSplitLane {
+          position: relative;
+          height: 50%;
+          width: 100%;
+          overflow: hidden;
+        }
+        .wtSplitLaneTop {
+          border-bottom: 1px solid #000;
+        }
+        .wtSplitSeg {
+          position: absolute;
+          height: 100%;
+          top: 0;
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+        }
+        .wtSplitEmpty {
+          background: repeating-linear-gradient(
+            45deg,
+            #f2f2f2,
+            #f2f2f2 8px,
+            #d8d8d8 8px,
+            #d8d8d8 16px
+          );
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+        }
+      </style>
     </head>
     <body>
       ${projectName ? `<div class="project"><b>Project:</b> ${projectName}</div>` : ""}
@@ -1855,17 +2236,109 @@ function exportCutSheets() {
   `);
 
   for (const material in lastNestResults) {
-    lastNestResults[material].forEach((bar, i) => {
-      const wpf = weightLbPerFt(material);
+    const bars = lastNestResults[material];
+
+    if (isWT(material)) {
+      const parent = suggestedParentWForWT(material) || 'W parent';
+      const parentBars = bars;
+
+      parentBars.forEach((parentBar, i) => {
+        const parentLen = parentBar.len;
+        const bottomUnused = !(parentBar.bottom && parentBar.bottom.cuts && parentBar.bottom.cuts.length);
+
+        w.document.write(`
+          <h2>CUT SHEET</h2>
+          <div class="block"><b>Material:</b> ${material}</div>
+          <div class="block"><b>Parent Bar ${i + 1}:</b> ${parent} @ ${(parentLen / 12).toFixed(1)}′</div>
+          <div class="block"><b>Nesting:</b> True parent-bar layout with top and bottom WT tee lanes cut directly from the same parent W.</div>
+          <div class="wtSplitOuter">
+            <div class="wtSplitLane wtSplitLaneTop">${laneSegmentsHtml(parentBar.top, parentLen, true)}</div>
+            <div class="wtSplitLane">${laneSegmentsHtml(parentBar.bottom, parentLen, true)}</div>
+          </div>
+          <div class="block">
+            <b>Top Tee Lane:</b>
+            Utilization ${laneUtilPct(parentBar.top, parentLen)}%
+            — Drop ${laneDropIn(parentBar.top, parentLen).toFixed(3)} in
+            — Weight ${laneWeightText(material, parentBar.top, parentLen, true)}
+          </div>
+          <table style="width:100%; border-collapse:collapse;" border="1" cellspacing="0" cellpadding="4">
+            <tr>
+              <th>#</th>
+              <th>Part</th>
+              <th>Len (in)</th>
+              <th>CUTDETAIL1</th>
+              <th style="text-align:center;">ANG</th>
+              <th>CUTDETAIL2</th>
+            </tr>
+        `);
+
+        if (parentBar.top && parentBar.top.cuts && parentBar.top.cuts.length) {
+          parentBar.top.cuts.forEach((c, idx) => {
+            w.document.write(`<tr>
+              <td><b>${idx + 1}.</b></td>
+              <td>${escapeHtml(c.part)}</td>
+              <td>${Number(c.len).toFixed(3)}</td>
+              <td>${escapeHtml(c.cutdetail1)}</td>
+              <td style="text-align:center;">${escapeHtml(c.ang)}</td>
+              <td>${escapeHtml(c.cutdetail2)}</td>
+            </tr>`);
+          });
+        } else {
+          w.document.write(`<tr><td colspan="6"><i>Unused WT half</i></td></tr>`);
+        }
+
+        w.document.write(`</table>
+          <div class="block" style="margin-top:10px;">
+            <b>Bottom Tee Lane:</b>
+            Utilization ${laneUtilPct(parentBar.bottom, parentLen)}%
+            — Drop ${laneDropIn(parentBar.bottom, parentLen).toFixed(3)} in
+            — Weight ${laneWeightText(material, parentBar.bottom, parentLen, true)}
+            ${bottomUnused ? ' — <span style="color:#b00020;">Unused WT half</span>' : ''}
+          </div>
+          <table style="width:100%; border-collapse:collapse;" border="1" cellspacing="0" cellpadding="4">
+            <tr>
+              <th>#</th>
+              <th>Part</th>
+              <th>Len (in)</th>
+              <th>CUTDETAIL1</th>
+              <th style="text-align:center;">ANG</th>
+              <th>CUTDETAIL2</th>
+            </tr>
+        `);
+
+        if (parentBar.bottom && parentBar.bottom.cuts && parentBar.bottom.cuts.length) {
+          parentBar.bottom.cuts.forEach((c, idx) => {
+            w.document.write(`<tr>
+              <td><b>${idx + 1}.</b></td>
+              <td>${escapeHtml(c.part)}</td>
+              <td>${Number(c.len).toFixed(3)}</td>
+              <td>${escapeHtml(c.cutdetail1)}</td>
+              <td style="text-align:center;">${escapeHtml(c.ang)}</td>
+              <td>${escapeHtml(c.cutdetail2)}</td>
+            </tr>`);
+          });
+        } else {
+          w.document.write(`<tr><td colspan="6"><i>Unused WT half</i></td></tr>`);
+        }
+
+        w.document.write(`</table><hr>`);
+      });
+      continue;
+    }
+
+    bars.forEach((bar, i) => {
+      const wpf = purchasedWeightLbPerFt(material);
       const barFt = bar.len / 12;
       const cutFt = bar.cuts.reduce((s, c) => s + c.len, 0) / 12;
       const barLb = wpf ? (wpf * barFt) : null;
       const cutLb = wpf ? (wpf * cutFt) : null;
       const dropLb = (barLb != null && cutLb != null) ? (barLb - cutLb) : null;
-      const weightText = (barLb != null) ? (barLb.toFixed(1) + " lb (cut " + cutLb.toFixed(1) + " lb, drop " + dropLb.toFixed(1) + " lb)") : "—";
+      const weightText = (barLb != null)
+        ? (barLb.toFixed(1) + " lb (cut " + cutLb.toFixed(1) + " lb, drop " + dropLb.toFixed(1) + " lb)")
+        : "—";
+
       let offset = 0;
       let barSegments = "";
-
       bar.cuts.forEach((c, idx) => {
         const pct = (c.len / bar.len) * 100;
         barSegments += `
@@ -1896,30 +2369,40 @@ function exportCutSheets() {
 
       w.document.write(`
         <h2>CUT SHEET</h2>
-
         <div class="block"><b>Material:</b> ${material}</div>
         <div class="block"><b>Bar ${i + 1}:</b> ${(bar.len / 12).toFixed(1)}′</div>
         <div class="block"><b>Drop:</b> ${bar.rem.toFixed(3)} in</div>
         <div class="block"><b>Bar weight:</b> ${weightText}</div>
-
         <div class="barOuter">
           ${barSegments}
         </div>
-
         <div class="block">
           <b>Cuts:</b>
           <table style="width:100%; border-collapse:collapse;" border="1" cellspacing="0" cellpadding="4">
- <tr><th>#</th><th>Part</th><th>Len (in)</th><th>CUTDETAIL1</th><th style="text-align:center;">ANG</th><th>CUTDETAIL2</th></tr>
+            <tr>
+              <th>#</th>
+              <th>Part</th>
+              <th>Len (in)</th>
+              <th>CUTDETAIL1</th>
+              <th style="text-align:center;">ANG</th>
+              <th>CUTDETAIL2</th>
+            </tr>
       `);
 
       bar.cuts.forEach((c, idx) => {
-        w.document.write(`<tr><td><b>${idx + 1}.</b></td><td>${escapeHtml(c.part)}</td><td>${Number(c.len).toFixed(3)}</td><td>${escapeHtml(c.cutdetail1)}</td><td style=\"text-align:center;\">${escapeHtml(c.ang)}</td><td>${escapeHtml(c.cutdetail2)}</td></tr>`);
+        w.document.write(`<tr>
+          <td><b>${idx + 1}.</b></td>
+          <td>${escapeHtml(c.part)}</td>
+          <td>${Number(c.len).toFixed(3)}</td>
+          <td>${escapeHtml(c.cutdetail1)}</td>
+          <td style="text-align:center;">${escapeHtml(c.ang)}</td>
+          <td>${escapeHtml(c.cutdetail2)}</td>
+        </tr>`);
       });
 
       w.document.write(`
           </table>
         </div>
-
         <hr>
       `);
     });
@@ -1944,11 +2427,11 @@ function exportPurchasingExcel() {
     return;
   }
 
-  const rows = [] ;
- rows.push([projectName || ""]);
- rows.push([`Generated by ${APP_NAME} ${APP_VERSION} on ${new Date().toLocaleString()}`]);
- rows.push([`Disclaimer: ${DISCLAIMER_TEXT}`]);
- rows.push([]);
+  const rows = [];
+  rows.push([projectName || ""]);
+  rows.push([`Generated by ${APP_NAME} ${APP_VERSION} on ${new Date().toLocaleString()}`]);
+  rows.push([`Disclaimer: ${DISCLAIMER_TEXT}`]);
+  rows.push([]);
 
   rows.push([
     "Material",
@@ -1968,6 +2451,54 @@ function exportPurchasingExcel() {
   for (const material in lastNestResults) {
     const bars = lastNestResults[material];
 
+    if (isWT(material)) {
+      const parent = suggestedParentWForWT(material);
+      const parentBars = bars;
+      const byLength = {};
+      parentBars.forEach(pb => {
+        byLength[pb.len] = byLength[pb.len] || [];
+        byLength[pb.len].push(pb);
+      });
+      for (const lenIn in byLength) {
+        const items = byLength[lenIn];
+        const qty = items.length;
+        const lenFt = Number(lenIn) / 12;
+        const wpf = purchasedWeightLbPerFt(material);
+        const totalOrderFt = lenFt * qty;
+        const totalLb = wpf ? (wpf * totalOrderFt) : null;
+        const cutFtThisLen = items.reduce((sum, pb) => {
+          const top = pb.top ? pb.top.cuts.reduce((s, c) => s + c.len, 0) : 0;
+          const bottom = pb.bottom ? pb.bottom.cuts.reduce((s, c) => s + c.len, 0) : 0;
+          return sum + (top + bottom) / 12;
+        }, 0);
+        const purchasedFtThisLen = lenFt * qty;
+        const purchasedLbThisLen = wpf ? (wpf * purchasedFtThisLen) : null;
+        const cutLbThisLen = wpf ? (wpf * cutFtThisLen) : null;
+        const dropLbThisLen = (purchasedLbThisLen != null && cutLbThisLen != null)
+          ? (purchasedLbThisLen - cutLbThisLen)
+          : null;
+        const utilPct = purchasedFtThisLen > 0
+          ? (100 * (cutFtThisLen / purchasedFtThisLen))
+          : null;
+        const unusedHalf = items.some(pb => !(pb.bottom && pb.bottom.cuts && pb.bottom.cuts.length));
+        rows.push([
+          purchasingMaterialLabel(material),
+          lenFt,
+          qty,
+          (lenFt * qty).toFixed(1),
+          `${parent ? `Suggested parent ${parent}. ` : ''}${unusedHalf ? 'One or more true parent bars have an unused WT half.' : 'WT nested as true parent W bars.'}`,
+          wpf ? wpf.toFixed(2) : "",
+          totalLb ? totalLb.toFixed(0) : "",
+          totalLb ? (totalLb / 2000).toFixed(2) : "",
+          purchasedLbThisLen != null ? purchasedLbThisLen.toFixed(0) : "",
+          cutLbThisLen != null ? cutLbThisLen.toFixed(0) : "",
+          dropLbThisLen != null ? dropLbThisLen.toFixed(0) : "",
+          utilPct != null ? utilPct.toFixed(1) : ""
+        ]);
+      }
+      continue;
+    }
+
     const byLength = {};
     bars.forEach(b => {
       byLength[b.len] = (byLength[b.len] || 0) + 1;
@@ -1976,24 +2507,31 @@ function exportPurchasingExcel() {
     for (const lenIn in byLength) {
       const qty = byLength[lenIn];
       const lenFt = Number(lenIn) / 12;
-
-      const wpf = weightLbPerFt(material);
+      const wpf = purchasedWeightLbPerFt(material);
       const totalOrderFt = lenFt * qty;
       const totalLb = wpf ? (wpf * totalOrderFt) : null;
 
-      const cutFtThisLen = bars.filter(b => b.len == Number(lenIn)).reduce((s,b) => s + b.cuts.reduce((ss,c)=>ss+c.len,0), 0) / 12;
+      const cutFtThisLen = bars
+        .filter(b => b.len == Number(lenIn))
+        .reduce((s, b) => s + b.cuts.reduce((ss, c) => ss + c.len, 0), 0) / 12;
+
       const purchasedFtThisLen = lenFt * qty;
       const purchasedLbThisLen = wpf ? (wpf * purchasedFtThisLen) : null;
       const cutLbThisLen = wpf ? (wpf * cutFtThisLen) : null;
-      const dropLbThisLen = (purchasedLbThisLen != null && cutLbThisLen != null) ? (purchasedLbThisLen - cutLbThisLen) : null;
-      const utilPct = purchasedFtThisLen > 0 ? (100 * (cutFtThisLen / purchasedFtThisLen)) : null;
+      const dropLbThisLen = (purchasedLbThisLen != null && cutLbThisLen != null)
+        ? (purchasedLbThisLen - cutLbThisLen)
+        : null;
+
+      const utilPct = purchasedFtThisLen > 0
+        ? (100 * (cutFtThisLen / purchasedFtThisLen))
+        : null;
 
       rows.push([
         material,
         lenFt,
         qty,
         (lenFt * qty).toFixed(1),
-        (diagnostics[material]?.converted > 0 ? "Fallback stock used" : ""),
+        (diagnostics[material] && diagnostics[material].converted > 0 ? "Fallback stock used" : ""),
         wpf ? wpf.toFixed(2) : "",
         totalLb ? totalLb.toFixed(0) : "",
         totalLb ? (totalLb / 2000).toFixed(2) : "",
@@ -2010,24 +2548,28 @@ function exportPurchasingExcel() {
   XLSX.utils.book_append_sheet(wb, ws, "Material Order");
 
   ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 7 } }];
-
   ws["!cols"] = [
     { wch: 40 },
     { wch: 18 },
     { wch: 10 },
     { wch: 18 },
-    { wch: 28 },
+    { wch: 38 },
     { wch: 14 },
+    { wch: 18 },
+    { wch: 16 },
+    { wch: 18 },
+    { wch: 18 },
     { wch: 18 },
     { wch: 16 }
   ];
 
   const fname = projectName
- ? `Material_Purchase_${projectName}_${APP_VERSION}.xlsx`
- : `Material_Purchase_${APP_VERSION}.xlsx`;
+    ? `Material_Purchase_${projectName}_${APP_VERSION}.xlsx`
+    : `Material_Purchase_${APP_VERSION}.xlsx`;
 
   XLSX.writeFile(wb, fname);
 }
+
 </script>
 
 
