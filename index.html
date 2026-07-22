@@ -258,8 +258,8 @@ let aiscWpfLoadAttempted = false;
 // Version + Disclaimer
 // =========================
 const APP_NAME = "Material Takeoff & Nesting";
-const APP_VERSION = "v1.0.5";
-const APP_BUILD_DATE = "2026-06-30";
+const APP_VERSION = "v1.0.6";
+const APP_BUILD_DATE = "2026-07-22";
 const DISCLAIMER_TEXT = "This tool automates takeoff and cut optimization. While automation can reduce effort, results may contain errors. Always verify all generated quantities, lengths, and weights against the project documents and shop standards before ordering or fabrication.";
 
 // Cache-bust AISC lookup while keeping the filename exactly: aisc_wpf_v16.json
@@ -414,19 +414,33 @@ async function loadAiscWpf() {
   if (aiscWpf || aiscWpfLoadAttempted) return !!aiscWpf;
   aiscWpfLoadAttempted = true;
 
+  // A file:// page cannot fetch a neighboring JSON file in current browsers.
+  // Use the existing fallback quietly when the app is opened directly from disk.
+  if (window.location.protocol === "file:") {
+    console.info(
+      "AISC WPF lookup skipped because this page was opened from disk. " +
+      "Geometry/designation weights will be used. For exact AISC lookup, run the folder through a local web server."
+    );
+    aiscWpf = null;
+    return false;
+  }
+
   try {
     const res = await fetch(AISC_JSON_URL, { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    aiscWpf = await res.json();
+    const data = await res.json();
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      throw new Error("AISC WPF file does not contain a JSON object");
+    }
+    aiscWpf = data;
     console.log(`AISC WPF loaded: ${Object.keys(aiscWpf).length} shapes`);
     return true;
   } catch (e) {
-    console.warn("AISC WPF lookup not loaded (falling back to geometry weights):", e);
+    console.warn("AISC WPF lookup not loaded; using geometry/designation weights.", e);
     aiscWpf = null;
     return false;
   }
 }
-
 function toAiscKey(materialDesc) {
   if (!materialDesc) return "";
   // Only use portion before comma (drops grade/spec for lookup)
@@ -1413,7 +1427,9 @@ function refreshStockSuggestions() {
     }
 
     row.dataset.suggestedPlan = encodePlanForDataset(newSuggested);
- row.dataset.suggestedNote = encodeURIComponent(plan.note);
+    row.dataset.suggestedNote = encodeURIComponent(
+      plan && plan.note ? plan.note : "All cuts satisfied by inventory overrides."
+    );
     updateSuggestionRow(row);
   });
 }
@@ -1995,6 +2011,18 @@ function toggleStock() {
 /* =====================================================
    GENERATE CUT LISTS
    ===================================================== */
+function cloneStockEntries(entries) {
+  // JSON stringify/parse converts Infinity to null and throws when entries is undefined.
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .filter(e => e && Number(e.len) > 0)
+    .map(e => ({
+      qty: e.qty === Infinity ? Infinity : (Number(e.qty) || 0),
+      len: Number(e.len),
+      ruleExempt: !!e.ruleExempt
+    }));
+}
+
 function generateCutLists() {
   ensureStockInitialized();
 
@@ -2026,8 +2054,25 @@ function generateCutLists() {
   const materialsSorted = Object.keys(grouped).sort(compareMaterial);
 
   for (const m of materialsSorted) {
-    const stock = JSON.parse(JSON.stringify(stockCache[m]));
-    const allowed = allowedStockLengthsFt(m, cutMapGlobal[m], getDropLimitFt());
+    let stock = cloneStockEntries(stockCache[m]);
+    const allowed = allowedStockLengthsFt(m, cutMapGlobal[m] || [], getDropLimitFt());
+
+    // Recover safely if a material has no stock row because the UI was stale or partial.
+    if (!stock.length) {
+      const cuts = cutMapGlobal[m] || grouped[m].map(c => c.len);
+      const plan = chooseStockPlan(m, cuts, kerf, getDropLimitFt());
+      stock = (plan.entries || [])
+        .filter(e => e && Number(e.lenFt) > 0)
+        .map(e => ({
+          qty: e.qty === Infinity ? Infinity : (Number(e.qty) || 0),
+          len: Number(e.lenFt) * 12,
+          ruleExempt: false
+        }));
+    }
+    if (!stock.length) {
+      setStatus(`No valid stock configuration is available for ${m}.`, "error");
+      continue;
+    }
     let bars;
 
     if (isWT(m)) {
