@@ -258,8 +258,8 @@ let aiscWpfLoadAttempted = false;
 // Version + Disclaimer
 // =========================
 const APP_NAME = "Material Takeoff & Nesting";
-const APP_VERSION = "v1.0.6";
-const APP_BUILD_DATE = "2026-07-22";
+const APP_VERSION = "v1.0.9";
+const APP_BUILD_DATE = "2026-07-25";
 const DISCLAIMER_TEXT = "This tool automates takeoff and cut optimization. While automation can reduce effort, results may contain errors. Always verify all generated quantities, lengths, and weights against the project documents and shop standards before ordering or fabrication.";
 
 // Cache-bust AISC lookup while keeping the filename exactly: aisc_wpf_v16.json
@@ -354,6 +354,84 @@ function escapeHtml(s) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+// Greatest common divisor used to simplify fractional inches.
+function gcd(a, b) {
+  a = Math.abs(a);
+  b = Math.abs(b);
+  while (b) {
+    const t = b;
+    b = a % b;
+    a = t;
+  }
+  return a || 1;
+}
+
+// Format an internal inch value as feet - inches, rounded to nearest 1/16 inch.
+// Examples: 12' - 3 1/8", 8' - 6 1/2", 10' - 0".
+function formatFeetInches(totalInches) {
+  let value = Number(totalInches);
+  if (!isFinite(value)) return '—';
+
+  const sign = value < 0 ? '-' : '';
+  value = Math.abs(value);
+
+  // Round the complete length first so 11 31/32" correctly carries to 12".
+  let totalSixteenths = Math.round(value * 16);
+  let feet = Math.floor(totalSixteenths / (12 * 16));
+  let remainingSixteenths = totalSixteenths - (feet * 12 * 16);
+  let wholeInches = Math.floor(remainingSixteenths / 16);
+  let numerator = remainingSixteenths % 16;
+
+  let inchText = String(wholeInches);
+  if (numerator) {
+    const divisor = gcd(numerator, 16);
+    const reducedNumerator = numerator / divisor;
+    const reducedDenominator = 16 / divisor;
+    inchText = wholeInches
+      ? `${wholeInches} ${reducedNumerator}/${reducedDenominator}`
+      : `${reducedNumerator}/${reducedDenominator}`;
+  }
+
+  return `${sign}${feet}' - ${inchText}\"`;
+}
+
+// Parse stock lengths entered as feet - inches. Fractional and decimal inches
+// are accepted, along with a legacy plain number interpreted as feet.
+function parseStockLengthFt(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return 0;
+
+  const normalized = raw.replace(/[′’]/g, "'").replace(/[″“”]/g, '\"');
+  const match = normalized.match(/^([+-])?\s*(\d+(?:\.\d+)?)\s*'\s*(?:-\s*)?([^\"]*)\s*\"?$/);
+  if (match) {
+    const sign = match[1] === '-' ? -1 : 1;
+    const feet = Number(match[2]) || 0;
+    const inchToken = String(match[3] || '').trim();
+    let inches = 0;
+
+    if (inchToken) {
+      const mixed = inchToken.match(/^(?:(\d+(?:\.\d+)?)\s+)?(\d+)\/(\d+)$/);
+      if (mixed) {
+        const whole = Number(mixed[1]) || 0;
+        const numerator = Number(mixed[2]) || 0;
+        const denominator = Number(mixed[3]) || 1;
+        inches = whole + (numerator / denominator);
+      } else {
+        inches = Number(inchToken) || 0;
+      }
+    }
+
+    return sign * (feet + inches / 12);
+  }
+
+  const legacyFeet = Number(normalized);
+  return isFinite(legacyFeet) ? legacyFeet : 0;
+}
+
+function formatStockLengthFt(feet) {
+  return formatFeetInches(Number(feet) * 12);
 }
 
 function markDirty() {
@@ -1027,7 +1105,7 @@ function laneSegmentsHtml(bar, parentLen, showCutNumbers = false) {
       : '';
     const label = showCutNumbers ? String(cutNo) : '';
     const title = showCutNumbers
-      ? ` title="Cut ${cutNo}: ${escapeHtml(c.part)} — ${Number(c.len).toFixed(3)} in"`
+      ? ` title="Cut ${cutNo}: ${escapeHtml(c.part)} — ${formatFeetInches(c.len)}"`
       : '';
     segs += `<div class="wtSplitSeg"${title} style="left:${off}%;width:${pct}%;background:${colorForCut(idx)};${labelStyle}">${label}</div>`;
     off += pct;
@@ -1074,14 +1152,14 @@ function renderLaneDetails(title, material, bar, parentLen, usePurchasedWeight) 
   const dropIn = laneDropIn(bar, parentLen);
   const weightText = laneWeightText(material, bar, parentLen, usePurchasedWeight);
 
-  let html = `<div class="wtLaneLabel">${title} — Utilization ${util}% — Drop ${dropIn.toFixed(3)} in — Weight ${weightText}</div>`;
-  html += `<table style="width:100%; margin-top:6px;"><tr><th>Part</th><th>Len (in)</th><th>CUTDETAIL1</th><th style="text-align:center;">ANG</th><th>CUTDETAIL2</th></tr>`;
+  let html = `<div class="wtLaneLabel">${title} — Utilization ${util}% — Drop ${formatFeetInches(dropIn)} — Weight ${weightText}</div>`;
+  html += `<table style="width:100%; margin-top:6px;"><tr><th>Part</th><th>Len (ft - in)</th><th>CUTDETAIL1</th><th style="text-align:center;">ANG</th><th>CUTDETAIL2</th></tr>`;
 
   if (!bar || !(bar.cuts || []).length) {
     html += `<tr><td colspan="5"><i>Unused WT half</i></td></tr>`;
   } else {
     (bar.cuts || []).forEach(c => {
-      html += `<tr><td>${escapeHtml(c.part)}</td><td>${Number(c.len).toFixed(3)}</td><td>${escapeHtml(c.cutdetail1)}</td><td style="text-align:center;">${escapeHtml(c.ang)}</td><td>${escapeHtml(c.cutdetail2)}</td></tr>`;
+      html += `<tr><td>${escapeHtml(c.part)}</td><td>${formatFeetInches(c.len)}</td><td>${escapeHtml(c.cutdetail1)}</td><td style="text-align:center;">${escapeHtml(c.ang)}</td><td>${escapeHtml(c.cutdetail2)}</td></tr>`;
     });
   }
 
@@ -1098,8 +1176,8 @@ function renderWtParentCard(material, parentBar, idx, usePurchasedWeight) {
   const bottomUnused = !(parentBar.bottom && (parentBar.bottom.cuts || []).length);
 
   let html = `<div class="wtParentCard">`;
-  html += `<div><b>Parent Bar ${idx + 1}</b> — ${parent} @ ${(parentLen / 12).toFixed(1)}′</div>`;
-  html += `<div class="wtParentMeta">True parent-bar nesting view. Top and bottom lanes represent the two WT halves cut from one parent W shape. Governing lane drop: ${sharedDropIn.toFixed(3)} in.${bottomUnused ? ' <span class="note">⚠ Bottom WT half unused on this parent bar.</span>' : ''}</div>`;
+  html += `<div><b>Parent Bar ${idx + 1}</b> — ${parent} @ ${formatFeetInches(parentLen)}</div>`;
+  html += `<div class="wtParentMeta">True parent-bar nesting view. Top and bottom lanes represent the two WT halves cut from one parent W shape. Governing lane drop: ${formatFeetInches(sharedDropIn)}.${bottomUnused ? ' <span class="note">⚠ Bottom WT half unused on this parent bar.</span>' : ''}</div>`;
   html += `<div class="wtSplitOuter">`;
   html += `<div class="wtSplitLane wtSplitLaneTop">${laneSegmentsHtml(parentBar.top, parentLen)}</div>`;
   html += `<div class="wtSplitLane">${laneSegmentsHtml(parentBar.bottom, parentLen)}</div>`;
@@ -1152,7 +1230,7 @@ function updateSuggestionRow(row) {
   const current = [];
   for (let i=0;i<inputs.length;i+=2) {
     const qtyRaw = String(inputs[i].value || "").trim();
-    const lenFt = Number(inputs[i+1].value);
+    const lenFt = parseStockLengthFt(inputs[i+1].value);
     if (!lenFt) continue;
     const qty = (qtyRaw === "∞") ? Infinity : (Number(qtyRaw) || 0);
     current.push({ qty, lenFt });
@@ -1198,7 +1276,7 @@ function getInventoryFromRow(row) {
     const qtyInput = inputs[slot*2];
     const lenInput = inputs[slot*2+1];
     const qtyRaw = String(qtyInput.value || '').trim();
-    const lenFt = Number(lenInput.value) || 0;
+    const lenFt = parseStockLengthFt(lenInput.value);
     if (!lenFt || !qtyRaw) continue;
 
     // Ignore auto-filled suggested cells as inventory
@@ -1284,7 +1362,7 @@ function ensureSuggestedColumns(row) {
 
   // Detect whether slot 0 is currently showing an ∞ fallback.
   const qty0 = String(inputs[0].value || '').trim();
-  const len0 = Number(inputs[1].value) || 0;
+  const len0 = parseStockLengthFt(inputs[1].value);
   const slot0ShowsInfinity = (qty0 === '∞' && len0 > 0);
 
   // Manual (non-auto) lengths already present should not be duplicated.
@@ -1292,7 +1370,7 @@ function ensureSuggestedColumns(row) {
   for (let slot = 0; slot < 4; slot++) {
     const qtyInput = inputs[slot*2];
     const lenInput = inputs[slot*2+1];
-    const lenFt = Number(lenInput.value) || 0;
+    const lenFt = parseStockLengthFt(lenInput.value);
     if (!lenFt) continue;
     if (isAutoCell(qtyInput) || isAutoCell(lenInput)) continue;
     manualLens.add(Number(lenFt));
@@ -1308,7 +1386,7 @@ function ensureSuggestedColumns(row) {
     const lenInput = inputs[slot*2+1];
 
     const qtyRaw = String(qtyInput.value || '').trim();
-    const lenFtNow = Number(lenInput.value) || 0;
+    const lenFtNow = parseStockLengthFt(lenInput.value);
     const empty = (!qtyRaw && !lenFtNow);
     const managed = isAutoCell(qtyInput) || isAutoCell(lenInput);
 
@@ -1325,7 +1403,7 @@ function ensureSuggestedColumns(row) {
 
     const e = usable[si++];
     qtyInput.value = (e.qty === Infinity) ? '∞' : String(e.qty);
-    lenInput.value = String(Number(e.lenFt));
+    lenInput.value = formatStockLengthFt(e.lenFt);
     qtyInput.dataset.auto = '1';
     lenInput.dataset.auto = '1';
   }
@@ -1366,7 +1444,7 @@ function resetSuggested(row) {
   for (let slot=0; slot<suggested.length && (slot*2+1)<inputs.length; slot++) {
     const e = suggested[slot];
     inputs[slot*2].value = (e.qty === Infinity) ? "∞" : String(e.qty);
-    inputs[slot*2+1].value = String(e.lenFt);
+    inputs[slot*2+1].value = formatStockLengthFt(e.lenFt);
   }
 
   updateSuggestionRow(row);
@@ -1405,7 +1483,7 @@ function refreshStockSuggestions() {
     const current = [];
     for (let i=0;i<inputs.length;i+=2) {
       const qtyRaw = String(inputs[i].value || "").trim();
-      const lenFt = Number(inputs[i+1].value);
+      const lenFt = parseStockLengthFt(inputs[i+1].value);
       if (!lenFt) continue;
       const qty = (qtyRaw === "∞") ? Infinity : (Number(qtyRaw) || 0);
       current.push({ qty, lenFt });
@@ -1422,7 +1500,7 @@ function refreshStockSuggestions() {
       for (let slot=0; slot<newSuggested.length && (slot*2+1)<inputs.length; slot++) {
         const e = newSuggested[slot];
         inputs[slot*2].value = (e.qty === Infinity) ? "∞" : String(e.qty);
-        inputs[slot*2+1].value = String(e.lenFt);
+        inputs[slot*2+1].value = formatStockLengthFt(e.lenFt);
       }
     }
 
@@ -1613,7 +1691,7 @@ function readStockConfig() {
 
     for (let i = 0; i < inputs.length; i += 2) {
       const qtyRaw = inputs[i].value.trim();
-      const lenFt = Number(inputs[i + 1].value);
+      const lenFt = parseStockLengthFt(inputs[i + 1].value);
       if (!lenFt) continue;
 
       // Determine if this entered length violates the allowed-length rules for this material
@@ -1786,28 +1864,12 @@ function nestCuts(cuts, stock, kerf) {
    PHASE 3: STOCK RECONCILIATION + DIAGNOSTICS
    ===================================================== */
 function reconcileStock(material, bars, stock) {
+  // nestCuts() already enforces finite stock quantities while opening bars:
+  // it decrements finite quantities and only uses the Infinity entry after the
+  // finite inventory has been exhausted. Do not compare bars used against the
+  // mutated remaining quantity here; doing so incorrectly flags valid bars as
+  // fallback stock (especially when the finite and fallback lengths are equal).
   diagnostics[material] = { converted: 0 };
-
-  const byLen = {};
-  bars.forEach(b => (byLen[b.len] = (byLen[b.len] || []).concat(b)));
-
-  stock.forEach(s => {
-    if (s.qty === Infinity) return;
-    const used = (byLen[s.len] || []).length;
-    if (used <= s.qty) return;
-
-    const excess = byLen[s.len]
-      .sort((a, b) => b.rem - a.rem)
-      .slice(0, used - s.qty);
-
-    excess.forEach(b => {
-      const fb = stock.find(x => x.qty === Infinity);
-      if (!fb) return;
-      b.len = fb.len;
-      b.rem = fb.len - b.cuts.reduce((s, c) => s + c.len, 0);
-      diagnostics[material].converted++;
-    });
-  });
 }
 
 /* =====================================================
@@ -1829,9 +1891,9 @@ function renderSummary() {
     <table>
       <tr>
         <th>Material</th>
-        <th>Required Length (ft)</th>
+        <th>Required Length</th>
         <th>Bars Used</th>
-        <th>Stock Length Used (ft)</th>
+        <th>Stock Length Used</th>
         <th>Fit Status</th>
         <th>Weight (lb)</th>
         <th>Weight (tons)</th>
@@ -1888,7 +1950,7 @@ function renderSummary() {
           .join(", ");
 
         purchasedFt = parentBars.reduce((s, b) => s + b.len, 0) / 12;
-        stockFt = purchasedFt.toFixed(1);
+        stockFt = formatFeetInches(purchasedFt * 12);
       } else {
         const mix = {};
         arr.forEach(b => (mix[b.len] = (mix[b.len] || 0) + 1));
@@ -1899,7 +1961,7 @@ function renderSummary() {
           .join(", ");
 
         purchasedFt = arr.reduce((s, b) => s + b.len, 0) / 12;
-        stockFt = purchasedFt.toFixed(1);
+        stockFt = formatFeetInches(purchasedFt * 12);
       }
     }
 
@@ -1918,7 +1980,7 @@ function renderSummary() {
 
     html += `<tr class="${rowClass}">
       <td>${materialLabel}</td>
-      <td>${reqFt.toFixed(1)}</td>
+      <td>${formatFeetInches(reqIn)}</td>
       <td>${bars}</td>
       <td>${stockFt}</td>
       <td>${status}</td>
@@ -1955,7 +2017,7 @@ function toggleStock() {
     });
 
     let html = "<h3>Stock Configuration</h3><table><tr><th>Material</th>";
-    for (let i = 0; i < 4; i++) html += "<th>Qty</th><th>Len (ft)</th>";
+    for (let i = 0; i < 4; i++) html += "<th>Qty</th><th>Len (ft - in)</th>";
     html += "</tr>";
 
     mats.forEach(m => {
@@ -1982,10 +2044,10 @@ function toggleStock() {
 
         if (idx === 0) {
           html += `
-          <td><input value="${s.len}" oninput="handleStockInput(this)"${idx===0?"":" data-auto=\"1\""}></td>`;
+          <td><input value="${s.len === "" ? "" : formatStockLengthFt(s.len)}" oninput="handleStockInput(this)"${idx===0?"":" data-auto=\"1\""}></td>`;
         } else {
           html += `
-          <td><input value="${s.len}" oninput="handleStockInput(this)"${idx===0?"":" data-auto=\"1\""}></td>`;
+          <td><input value="${s.len === "" ? "" : formatStockLengthFt(s.len)}" oninput="handleStockInput(this)"${idx===0?"":" data-auto=\"1\""}></td>`;
         }
       });
 
@@ -2154,15 +2216,15 @@ function generateCutLists() {
 
       html += `
       <div class="${b.impossible ? "neg" : ""}">
-        <b>Bar ${i + 1}</b> (${(b.len / 12).toFixed(1)}′)
-        — Drop ${b.rem.toFixed(3)} in
+        <b>Bar ${i + 1}</b> (${formatFeetInches(b.len)})
+        — Drop ${formatFeetInches(b.rem)}
         — Utilization ${util}%
         — Weight ${weightText}
         <div class="barOuter ${b.impossible ? "bar-bad" : "bar-ok"}">${segs}</div>
         <table style="width:100%; margin-top:6px;">
           <tr>
             <th>Part</th>
-            <th>Len (in)</th>
+            <th>Len (ft - in)</th>
             <th>CUTDETAIL1</th>
             <th style="text-align:center;">ANG</th>
             <th>CUTDETAIL2</th>
@@ -2171,7 +2233,7 @@ function generateCutLists() {
       b.cuts.forEach(c => {
         html += `<tr>
           <td>${escapeHtml(c.part)}</td>
-          <td>${Number(c.len).toFixed(3)}</td>
+          <td>${formatFeetInches(c.len)}</td>
           <td>${escapeHtml(c.cutdetail1)}</td>
           <td style="text-align:center;">${escapeHtml(c.ang)}</td>
           <td>${escapeHtml(c.cutdetail2)}</td>
@@ -2294,7 +2356,7 @@ function exportCutSheets() {
         w.document.write(`
           <h2>CUT SHEET</h2>
           <div class="block"><b>Material:</b> ${material}</div>
-          <div class="block"><b>Parent Bar ${i + 1}:</b> ${parent} @ ${(parentLen / 12).toFixed(1)}′</div>
+          <div class="block"><b>Parent Bar ${i + 1}:</b> ${parent} @ ${formatFeetInches(parentLen)}</div>
           <div class="block"><b>Nesting:</b> True parent-bar layout with top and bottom WT tee lanes cut directly from the same parent W.</div>
           <div class="wtSplitOuter">
             <div class="wtSplitLane wtSplitLaneTop">${laneSegmentsHtml(parentBar.top, parentLen, true)}</div>
@@ -2303,14 +2365,14 @@ function exportCutSheets() {
           <div class="block">
             <b>Top Tee Lane:</b>
             Utilization ${laneUtilPct(parentBar.top, parentLen)}%
-            — Drop ${laneDropIn(parentBar.top, parentLen).toFixed(3)} in
+            — Drop ${formatFeetInches(laneDropIn(parentBar.top, parentLen))}
             — Weight ${laneWeightText(material, parentBar.top, parentLen, true)}
           </div>
           <table style="width:100%; border-collapse:collapse;" border="1" cellspacing="0" cellpadding="4">
             <tr>
               <th>#</th>
               <th>Part</th>
-              <th>Len (in)</th>
+              <th>Len (ft - in)</th>
               <th>CUTDETAIL1</th>
               <th style="text-align:center;">ANG</th>
               <th>CUTDETAIL2</th>
@@ -2322,7 +2384,7 @@ function exportCutSheets() {
             w.document.write(`<tr>
               <td><b>${idx + 1}.</b></td>
               <td>${escapeHtml(c.part)}</td>
-              <td>${Number(c.len).toFixed(3)}</td>
+              <td>${formatFeetInches(c.len)}</td>
               <td>${escapeHtml(c.cutdetail1)}</td>
               <td style="text-align:center;">${escapeHtml(c.ang)}</td>
               <td>${escapeHtml(c.cutdetail2)}</td>
@@ -2336,7 +2398,7 @@ function exportCutSheets() {
           <div class="block" style="margin-top:10px;">
             <b>Bottom Tee Lane:</b>
             Utilization ${laneUtilPct(parentBar.bottom, parentLen)}%
-            — Drop ${laneDropIn(parentBar.bottom, parentLen).toFixed(3)} in
+            — Drop ${formatFeetInches(laneDropIn(parentBar.bottom, parentLen))}
             — Weight ${laneWeightText(material, parentBar.bottom, parentLen, true)}
             ${bottomUnused ? ' — <span style="color:#b00020;">Unused WT half</span>' : ''}
           </div>
@@ -2344,7 +2406,7 @@ function exportCutSheets() {
             <tr>
               <th>#</th>
               <th>Part</th>
-              <th>Len (in)</th>
+              <th>Len (ft - in)</th>
               <th>CUTDETAIL1</th>
               <th style="text-align:center;">ANG</th>
               <th>CUTDETAIL2</th>
@@ -2356,7 +2418,7 @@ function exportCutSheets() {
             w.document.write(`<tr>
               <td><b>${idx + 1}.</b></td>
               <td>${escapeHtml(c.part)}</td>
-              <td>${Number(c.len).toFixed(3)}</td>
+              <td>${formatFeetInches(c.len)}</td>
               <td>${escapeHtml(c.cutdetail1)}</td>
               <td style="text-align:center;">${escapeHtml(c.ang)}</td>
               <td>${escapeHtml(c.cutdetail2)}</td>
@@ -2415,8 +2477,8 @@ function exportCutSheets() {
       w.document.write(`
         <h2>CUT SHEET</h2>
         <div class="block"><b>Material:</b> ${material}</div>
-        <div class="block"><b>Bar ${i + 1}:</b> ${(bar.len / 12).toFixed(1)}′</div>
-        <div class="block"><b>Drop:</b> ${bar.rem.toFixed(3)} in</div>
+        <div class="block"><b>Bar ${i + 1}:</b> ${formatFeetInches(bar.len)}</div>
+        <div class="block"><b>Drop:</b> ${formatFeetInches(bar.rem)}</div>
         <div class="block"><b>Bar weight:</b> ${weightText}</div>
         <div class="barOuter">
           ${barSegments}
@@ -2427,7 +2489,7 @@ function exportCutSheets() {
             <tr>
               <th>#</th>
               <th>Part</th>
-              <th>Len (in)</th>
+              <th>Len (ft - in)</th>
               <th>CUTDETAIL1</th>
               <th style="text-align:center;">ANG</th>
               <th>CUTDETAIL2</th>
@@ -2438,7 +2500,7 @@ function exportCutSheets() {
         w.document.write(`<tr>
           <td><b>${idx + 1}.</b></td>
           <td>${escapeHtml(c.part)}</td>
-          <td>${Number(c.len).toFixed(3)}</td>
+          <td>${formatFeetInches(c.len)}</td>
           <td>${escapeHtml(c.cutdetail1)}</td>
           <td style="text-align:center;">${escapeHtml(c.ang)}</td>
           <td>${escapeHtml(c.cutdetail2)}</td>
